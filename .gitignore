@@ -1,0 +1,42 @@
+# Local benchmark repositories and data
+/benchmarks/*
+!/benchmarks/README.md
+
+# Python packaging and caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.ipynb_checkpoints/
+
+# Virtual / Conda environments and secrets
+.venv/
+venv/
+env/
+envs/
+.conda/
+.conda_env/
+.env
+.env.*
+!.env.example
+
+# Evaluation output
+/logs/
+/outputs/
+/results/
+*.eval
+*.log
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

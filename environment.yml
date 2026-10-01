@@ -1,0 +1,8 @@
+name: secure-coding-agents
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+      - -e .

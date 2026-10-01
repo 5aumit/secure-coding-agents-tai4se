@@ -1,0 +1,6 @@
+# Supply a provider/model at runtime, or set it here.
+model: null
+enabled_tools:
+  - bash
+  - python
+max_messages: 30
