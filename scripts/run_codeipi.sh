@@ -31,7 +31,7 @@ os.execvp("inspect", [
     "inspect", "eval", str(task.relative_to(Path.cwd())),
     "--solver", "agents/agent.py@coding_agent",
     "--model", model,
-    "-S", "enabled_tools=" + json.dumps(config["enabled_tools"]),
+    "-S", "enabled_tools=" + json.dumps(config["enabled_tools"], separators=(",", ":")),
     "--message-limit", str(config["max_messages"]),
     *args,
 ])
