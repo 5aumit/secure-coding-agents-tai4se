@@ -32,7 +32,6 @@ envs/
 /logs/
 /outputs/
 /results/
-*.eval
 *.log
 
 # Editor and OS files
