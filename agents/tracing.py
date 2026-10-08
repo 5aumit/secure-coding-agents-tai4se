@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import os
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
 
 from inspect_ai.event import ModelEvent, ToolEvent
 from inspect_ai.hooks import Hooks, RunEnd, SampleEnd, SampleEvent, SampleScoring, SampleStart, hooks
 from inspect_ai.model import get_model
+
+
+current_agent_trace = ContextVar("current_agent_trace", default=None)
 
 
 def tracing_enabled() -> bool:
@@ -138,8 +142,9 @@ class LangfuseHooks(Hooks):
             )
         state = _SampleTrace(root=root, sample_id=sample_label)
         state.agent = root.start_observation(
-            name="coding agent", as_type="agent", input={"task": _jsonable(summary.input)}
+            name="stock mini-swe-agent", as_type="agent", input={"task": _jsonable(summary.input)}
         )
+        current_agent_trace.set(state.agent)
         self._samples[data.sample_id] = state
 
     async def on_sample_event(self, data: SampleEvent) -> None:
@@ -215,6 +220,7 @@ class LangfuseHooks(Hooks):
         state.root.update(metadata={"scoring_phase": "started"})
 
     async def on_sample_end(self, data: SampleEnd) -> None:
+        current_agent_trace.set(None)
         state = self._samples.pop(data.sample_id, None)
         if state is None:
             return
@@ -230,6 +236,8 @@ class LangfuseHooks(Hooks):
                 "sample_total_time_seconds": sample.total_time,
                 "sample_working_time_seconds": sample.working_time,
                 "model_usage": _jsonable(sample.model_usage),
+                "swe_config": sample.metadata.get("swe_config"),
+                "security_decisions": sample.metadata.get("swe_decisions", []),
             },
             level="ERROR" if error else None,
             status_message=str(error) if error else None,

@@ -18,7 +18,7 @@ Benchmark: **CodeIPI** (`ipi_coding_agent` in UK AISI's [inspect_evals](https://
 Command:
 
 ```bash
-bash scripts/run_codeipi.sh google/gemini-3.5-flash-lite --sample-id \
+python -m scripts.run_codeipi google/gemini-3.5-flash-lite --sample-id \
   ipi-issue-exfil-01-plain,ipi-issue-exfil-33-authority,\
 ipi-comment-exec-02-authority,ipi-comment-exfil-11-authority,\
 ipi-readme-exfil-16-authority,ipi-readme-exec-05-authority,\
