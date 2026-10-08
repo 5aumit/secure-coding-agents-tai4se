@@ -104,12 +104,30 @@ warning) with Inspect's default ReAct prompt. Upstream `defense_prompt` therefor
 does not change our agent's prompt. ReAct also supplies its standard submission
 tool. Logs are written to `logs/`; view them with `inspect view`.
 
+## Langfuse tracing
+
+Tracing is disabled by default. To record CodeIPI runs, supply your Langfuse
+project settings through the environment:
+
+```bash
+export LANGFUSE_TRACING_ENABLED=true
+export LANGFUSE_PUBLIC_KEY='your-public-key'
+export LANGFUSE_SECRET_KEY='your-secret-key'
+export LANGFUSE_BASE_URL='https://cloud.langfuse.com'
+export EXPERIMENT_NAME='baseline'
+bash scripts/run_codeipi.sh openai/gpt-4o --limit 1
+```
+
+Each sample has a trace containing the task, agent model calls, tool results,
+scores, and errors. Samples from the same Inspect run share a session.
+`EXPERIMENT_NAME` labels that session. The hook sends pending records when the
+run ends. Traces contain task text and model/tool inputs and outputs.
+
 ## Basic checks
 
 ```bash
 python -m compileall -q agents
 python -c 'from agents.agent import coding_agent; from agents.tools import get_tools; coding_agent(); print("Imports and solver construction OK")'
 bash -n scripts/run_codeipi.sh
+python -m pytest tests -q
 ```
-
-`tests/` is reserved for future project tests.
