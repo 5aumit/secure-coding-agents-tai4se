@@ -27,8 +27,9 @@ git -C benchmarks/inspect_evals sparse-checkout set \
 ```
 
 Do not install the sparse checkout as a package: its registry imports other
-benchmarks. Run `bash scripts/run_codeipi.sh PROVIDER/MODEL` from the project
-root instead. The script loads the task file directly and sets `PYTHONPATH` for
+benchmarks. Run `python -m scripts.run_codeipi PROVIDER/MODEL` from the project
+root, or set the model in `configs/default.yaml`. The script loads the task file
+directly and sets `PYTHONPATH` for
 its package imports. Keep the entire CodeIPI directory, including dataset and
 Docker files. See the project README for Conda and Docker setup.
 

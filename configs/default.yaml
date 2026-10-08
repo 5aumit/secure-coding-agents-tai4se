@@ -1,6 +1,11 @@
-# Supply a provider/model at runtime, or set it here.
-model: null
-enabled_tools:
-  - bash
-  - python
-max_messages: 30
+# Shared stock mini-swe-agent settings.
+model: openrouter/openai/gpt-oss-20b
+limits:
+  steps: 24
+  seconds: 300
+  cost_usd: 0.15
+security:
+  checks:
+    - name: regex
+      enabled: false
+      patterns: []

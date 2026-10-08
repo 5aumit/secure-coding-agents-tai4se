@@ -1,8 +1,8 @@
-name: secure-coding-agents
+name: tai4se-secure-coding-agents
 channels:
   - conda-forge
 dependencies:
   - python=3.12
   - pip
   - pip:
-      - -e .
+      - -e .  # Includes mini-swe-agent, Inspect AI, and Langfuse.
