@@ -1,7 +1,7 @@
 # Shared stock mini-swe-agent settings.
 model: openrouter/openai/gpt-oss-20b
 limits:
-  steps: 24
+  steps: 40
   seconds: 300
   cost_usd: 0.15
 security:

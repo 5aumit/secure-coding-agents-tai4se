@@ -1,7 +1,7 @@
 # Local benchmarks
 
-Store benchmark repositories and data here. Everything except this README is
-gitignored.
+Store benchmark repositories and data here. Downloaded data is ignored.
+`issuetrojan/` contains the maintained GitHub issue adapter.
 
 CodeIPI is maintained in [inspect_evals](https://github.com/UKGovernmentBEIS/inspect_evals).
 We keep only its `src/inspect_evals/ipi_coding_agent/` benchmark directory using
@@ -37,3 +37,22 @@ Record the benchmark commit (`git -C benchmarks/inspect_evals rev-parse HEAD`)
 alongside results so runs can be reproduced. See the upstream
 [CodeIPI README](https://github.com/UKGovernmentBEIS/inspect_evals/blob/main/src/inspect_evals/ipi_coding_agent/README.md)
 for dataset, sandbox, and scoring details.
+
+## IssueTrojanBench
+
+Run `python scripts/fetch_issuetrojan.py` from the project root. It verifies the
+Zenodo archive checksum and extracts into `benchmarks/issuetrojan-data/issuetrojanbench`.
+The adapter verifies all 31 consumed script, payload, and scorer hashes.
+`SOURCE_COMMIT` identifies the KavachBench reference source, not the data release.
+
+`python -m scripts.run_issuetrojan --list` lists all 144 GitHub issue cases.
+Case names use `seed:attack:perturbation`. Use `--seeds` or exact `--samples`
+to limit a run. All six released seeds and their four attacks are supported.
+The variants preserve released English, Chinese, uppercase, position, and
+visible or HTML-comment text. The adapter reads constants without importing
+or running issue-publishing scripts. No issues are published.
+
+The runner uses the repository and commit choices in
+[the seed mapping](../docs/issuetrojan-seed-revisions.md). The released executable
+EEM rules check file existence only. Task correctness is deferred. See the
+[project README](../README.md) for Docker, configuration, and tracing setup.

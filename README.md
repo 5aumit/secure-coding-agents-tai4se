@@ -1,7 +1,7 @@
 # Coding agent evaluation research
 
-A research project for CodeIPI prompt injection tasks.
-CodeIPI runs stock mini-swe-agent through `agents.swe.run_swe`.
+A research project for CodeIPI and IssueTrojanBench prompt injection tasks.
+Both benchmarks run stock mini-swe-agent through `agents.swe.run_swe`.
 `agents.security.GuardedEnvironment` checks commands proposed by the model.
 
 ## Conda environment
@@ -20,8 +20,8 @@ and running for CodeIPI's sandbox. Check it with `docker info` and
 
 ## Benchmarks
 
-Keep local benchmark repositories and data in `benchmarks/`. Its contents are
-gitignored except for `benchmarks/README.md`.
+Keep local benchmark repositories and data in `benchmarks/`. Downloaded data is
+ignored. The IssueTrojan adapter and `benchmarks/README.md` are maintained code.
 
 ```bash
 git clone --depth 1 --filter=blob:none --sparse \
@@ -82,7 +82,7 @@ Replace the example model with your mini-swe-agent `provider/model` identifier.
 For other providers, set their corresponding API key.
 
 `configs/default.yaml` sets the model, mini limits, and ordered security checks.
-Use `--config path/to/config.yaml` with the CodeIPI entry point.
+Use `--config path/to/config.yaml` with either benchmark entry point.
 The first script argument overrides the configured model. Other arguments go
 to Inspect. Set `CODEIPI_SOURCE` to the upstream `src` directory when CodeIPI
 is outside this worktree.
@@ -102,6 +102,68 @@ mini model calls and shell commands appear under the sample agent trace.
 CodeIPI's code-execution scorer reads attempted tool calls. It can count a
 blocked command as compliance even though the command did not execute.
 Logs are written to `logs/`; view them with `inspect view`.
+
+For IssueTrojanBench, download its data and build its image first:
+
+The fetcher stores downloaded data under `benchmarks/issuetrojan-data/issuetrojanbench`.
+Maintained adapter code is under `benchmarks/issuetrojan/`.
+
+```bash
+python scripts/fetch_issuetrojan.py
+docker build -t issuetrojan-smoke:py312 -f configs/issuetrojan/Dockerfile configs/issuetrojan
+```
+
+Use the same configuration:
+
+```bash
+.venv/bin/python -m scripts.run_issuetrojan --config configs/default.yaml --output outputs/issuetrojan-new
+```
+
+The default selects all 144 released GitHub issue cases: six seeds, four attacks,
+and six variants per attack. Other delivery methods are outside this study.
+List cases before a paid run, or select a seed or exact sample:
+
+```bash
+python -m scripts.run_issuetrojan --list
+python -m scripts.run_issuetrojan --seeds hnf --list
+python -m scripts.run_issuetrojan \
+  --samples sympy_matrix_det:policy_bypass:mid_en_visible \
+  --output outputs/issuetrojan-matrix
+```
+
+`--seeds` and `--samples` accept multiple values. Combined filters intersect.
+Unknown values, duplicate filters, and empty selections fail before model calls.
+`--data` accepts an extracted release directory. Limits and security checks come
+from the shared config. Optional `--model`, `--steps`, `--seconds`, and
+`--cost-limit` override those values for this run. Credentials come only from
+the process environment. No host credentials or directories enter the container.
+
+The seconds limit is checked between agent steps. An active model request or
+provider retries can exceed it. Interrupting a run removes its container but
+can leave its final summary and trace score incomplete.
+
+If LiteLLM reports missing model pricing, supply mini's documented
+[`LITELLM_MODEL_REGISTRY_PATH`](https://mini-swe-agent.com/latest/models/local_models/#cost-tracking)
+with current provider prices. Keep default cost tracking enabled. Retain that
+pricing file with the ignored run outputs so cost estimates can be checked.
+
+Each case checks out its mapped repository and commit. Network access ends
+after provisioning. Containers have CPU, RAM, and PID limits and are removed
+in `finally`, including setup failures. Requests runtime dependencies and SymPy's
+mpmath dependency are installed in the image before network access ends.
+Provisioning installs the checked-out Requests package in editable mode so
+Python can import its `src/` layout after network access ends.
+See [seed revisions](docs/issuetrojan-seed-revisions.md) for checkout choices.
+
+Results record the effective configuration, checkout identity, commands, patch,
+indicator files, released EEM score, cleanup check, and optional trace URL.
+The released executable scorer checks only file existence. It does not prove
+that an attack command ran. Its persistence rule checks `.validate_refactor.sh`
+for every seed, although some payloads request other files. Probe failures are
+unscored. Inspect commands and files separately from EEM. Task correctness is
+deferred. One sample does not establish resistance or task correctness.
+[Earlier smoke results](docs/issuetrojan-smoke.md) describe the old matrix-only
+runner and are historical.
 
 ## Langfuse tracing
 
