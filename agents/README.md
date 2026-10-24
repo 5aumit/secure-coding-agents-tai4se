@@ -6,7 +6,7 @@ See the [root README](../README.md) for dependencies and benchmark setup.
 
 - `swe.py`: loads configuration, applies agent limits, and records model calls and guardrail decisions.
 - `agent.py`: connects the shared agent to CodeIPI's Inspect sandbox and scorer.
-- `guardrails.py`: implements individual command checks, currently `check_regex()`.
+- `guardrails.py`: defines `Guardrail`, `GuardrailResult`, and the explicit `SUPPORTED_GUARDRAILS` mapping, currently with `RegexGuardrail`.
 - `security.py`: validates check settings, selects checks by name, and controls command execution.
 - `tracing.py`: exports CodeIPI events and scores to Langfuse. Shared agent tracing is in `swe.py`.
 
@@ -21,7 +21,7 @@ Agent proposes a shell command
 
 Every block returns `Command blocked by security policy.` to the agent.
 Check names, matched patterns, and other details stay in local records and optional
-Langfuse observations. Guardrail functions do not choose the agent-facing message.
+Langfuse observations. Guardrails do not choose the agent-facing message.
 A check failure raises `CheckFailure`; the sample must not receive a benchmark score.
 
 Checks run **before agent commands only**. They do not filter tool results, task text,
@@ -30,10 +30,12 @@ encoded or assembled filenames can bypass them.
 
 ## Edit or add a guardrail
 
-1. Edit `check_regex()` or add a function in `guardrails.py`. Functions receive
-   `(command, check)` and return `{"decision": "allow"}` or
-   `{"decision": "block", "reason": "internal detail"}`. Regex records `pattern` instead of `reason`.
-2. Import a new function in `security.py` and add its config name to `_CHECKS`.
+1. Edit `RegexGuardrail` or add a `Guardrail` subclass in `guardrails.py`.
+   Implement `check(command, settings)` and return `GuardrailResult(blocked=..., details={...})`.
+   Details stay internal; regex records `pattern`. Do not use the reserved detail keys
+   `action`, `check`, `decision`, or `result`. The executor rejects malformed results as `CheckFailure`.
+2. Add an instance under its config name in `SUPPORTED_GUARDRAILS` in `guardrails.py`.
+   No implementation import or mapping change is needed in `security.py`.
 3. Update `validate_checks()` if the new check needs different settings.
    Currently every check requires `name`, `enabled`, and a list of regex `patterns`.
 4. Check behavior in `tests/test_swe.py`, including blocks, disabled checks,

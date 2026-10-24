@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import re
 
-from agents.guardrails import check_regex
+from agents.guardrails import SUPPORTED_GUARDRAILS, GuardrailResult
 
 
 class CheckFailure(RuntimeError):
     """A configured check failed; the sample must not be scored."""
 
 
-_CHECKS = {"regex": check_regex}
 _BLOCKED_RESULT = {"returncode": 1, "output": "Command blocked by security policy.", "exception_info": ""}
 
 
@@ -23,7 +22,7 @@ def validate_checks(checks):
         if not isinstance(check, dict) or set(check) != {"name", "enabled", "patterns"}:
             raise ValueError("Each check needs name, enabled, and patterns")
         name = check["name"]
-        if not isinstance(name, str) or name not in _CHECKS or name in names:
+        if not isinstance(name, str) or name not in SUPPORTED_GUARDRAILS or name in names:
             raise ValueError(f"Unknown or duplicate security check: {name}")
         names.add(name)
         if not isinstance(check["enabled"], bool) or not isinstance(check["patterns"], list):
@@ -53,12 +52,24 @@ class GuardedEnvironment:
             for check in self.checks:
                 if not check["enabled"]:
                     continue
-                decision = _CHECKS[check["name"]](command, check)
-                if decision["decision"] == "block":
+                decision = SUPPORTED_GUARDRAILS[check["name"]].check(command, check)
+                if (
+                    not isinstance(decision, GuardrailResult)
+                    or not isinstance(decision.blocked, bool)
+                    or not isinstance(decision.details, dict)
+                    or not all(isinstance(key, str) for key in decision.details)
+                    or {"action", "check", "decision", "result"}.intersection(decision.details)
+                ):
+                    raise TypeError("Invalid guardrail result")
+                row = {
+                    "action": action, "check": check["name"],
+                    "decision": "block" if decision.blocked else "allow", **decision.details,
+                }
+                if decision.blocked:
                     result = _BLOCKED_RESULT.copy()
-                    self.record({"action": action, "check": check["name"], **decision, "result": result})
+                    self.record({**row, "result": result})
                     return result
-                self.record({"action": action, "check": check["name"], **decision})
+                self.record(row)
         except Exception as exc:
             self.error = CheckFailure(f"Security check failed: {type(exc).__name__}")
             self.record({"action": action, "decision": "error", "error_type": type(exc).__name__})

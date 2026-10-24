@@ -7,7 +7,8 @@ import anyio
 import pytest
 
 from agents.agent import InspectEnvironment, _messages_for_scorer
-from agents.security import CheckFailure, GuardedEnvironment
+from agents.guardrails import SUPPORTED_GUARDRAILS, Guardrail, GuardrailResult, RegexGuardrail
+from agents.security import CheckFailure, GuardedEnvironment, validate_checks
 from agents.swe import load_config, run_swe
 
 
@@ -44,6 +45,91 @@ class FakeEnvironment:
 
 def config(enabled=False):
     return {"model": "test/model", "limits": {"steps": 4, "seconds": 30, "cost_usd": 1}, "security": {"checks": [{"name": "regex", "enabled": enabled, "patterns": ["forbidden"]}]}}
+
+
+def test_guardrail_requires_check():
+    class MissingCheck(Guardrail):
+        pass
+
+    with pytest.raises(TypeError, match="abstract"):
+        Guardrail()
+    with pytest.raises(TypeError, match="abstract"):
+        MissingCheck()
+
+
+@pytest.mark.parametrize("enabled,patterns,expected", [
+    (True, ["forbidden"], [("second", "block")]),
+    (True, ["absent"], [("second", "allow"), ("first", "block")]),
+    (False, ["forbidden"], [("first", "block")]),
+])
+def test_explicit_registration_and_config_order(monkeypatch, enabled, patterns, expected):
+    monkeypatch.setitem(SUPPORTED_GUARDRAILS, "first", RegexGuardrail())
+    monkeypatch.setitem(SUPPORTED_GUARDRAILS, "second", RegexGuardrail())
+    checks = [
+        {"name": "second", "enabled": enabled, "patterns": patterns},
+        {"name": "first", "enabled": True, "patterns": ["forbidden"]},
+    ]
+    raw, decisions = FakeEnvironment(), []
+    GuardedEnvironment(raw, checks, decisions.append).execute({"command": "forbidden"})
+    assert [(row["check"], row["decision"]) for row in decisions] == expected
+    assert raw.commands == []
+
+
+@pytest.mark.parametrize("invalid", [
+    None,
+    {"blocked": False},
+    GuardrailResult(blocked="false"),
+    GuardrailResult(blocked=0),
+    GuardrailResult(blocked=False, details=None),
+    GuardrailResult(blocked=False, details=[]),
+    GuardrailResult(blocked=False, details={1: "invalid key"}),
+    *[GuardrailResult(blocked=False, details={key: "override"})
+      for key in ("action", "check", "decision", "result")],
+])
+def test_malformed_result_stops_sample(tmp_path, monkeypatch, invalid):
+    model_commands(monkeypatch, ["forbidden"])
+    monkeypatch.setattr(SUPPORTED_GUARDRAILS["regex"], "check", lambda *_: invalid)
+    raw = FakeEnvironment()
+    path = tmp_path / "trajectory.json"
+    with pytest.raises(CheckFailure, match="TypeError"):
+        run_swe("issue", raw, "test/model", config(True), output_path=path)
+    assert raw.commands == []
+    saved = json.loads(path.read_text())
+    assert saved["info"]["security_decisions"] == [
+        {"action": {"command": "forbidden", "tool_call_id": "call-1"}, "decision": "error", "error_type": "TypeError"}
+    ]
+
+
+def test_internal_details_never_change_agent_feedback(tmp_path, monkeypatch):
+    model_commands(monkeypatch, ["forbidden", "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"])
+    details = {"pattern": "forbidden", "reason": "internal reason", "output": "private output",
+               "returncode": 0, "exception_info": "private exception"}
+    monkeypatch.setattr(SUPPORTED_GUARDRAILS["regex"], "check", lambda command, _: (
+        GuardrailResult(blocked=True, details=details) if command == "forbidden" else GuardrailResult(blocked=False)
+    ))
+    path = tmp_path / "trajectory.json"
+    run = run_swe("issue", FakeEnvironment(), "test/model", config(True), output_path=path)
+    expected = {"returncode": 1, "output": "Command blocked by security policy.", "exception_info": ""}
+    assert run["decisions"][0] == {
+        "action": {"command": "forbidden", "tool_call_id": "call-1"}, "check": "regex",
+        "decision": "block", **details, "result": expected,
+    }
+    saved = json.loads(path.read_text())
+    assert saved["info"]["security_decisions"] == run["decisions"]
+    tool_message = next(message for message in run["agent"].messages if message["role"] == "tool")
+    assert json.loads(tool_message["content"]) == {"returncode": 1, "output": expected["output"]}
+
+
+@pytest.mark.parametrize("checks", [
+    [{"name": "unknown", "enabled": True, "patterns": []}],
+    [{"name": "regex", "enabled": True, "patterns": []}] * 2,
+    [{"name": "regex", "enabled": False, "patterns": ["["]}],
+])
+def test_registration_does_not_relax_config_validation(checks):
+    import re
+
+    with pytest.raises((ValueError, re.error)):
+        validate_checks(checks)
 
 
 @pytest.mark.parametrize("enabled,patterns,blocked_pattern", [
@@ -89,11 +175,11 @@ def test_stock_loop_and_security(tmp_path, monkeypatch, enabled, executed):
 
 
 def test_check_failure_stops_sample_and_never_executes(tmp_path, monkeypatch):
-    from agents import security
+    from agents import guardrails
 
     raw = FakeEnvironment()
     model_commands(monkeypatch, ["forbidden"])
-    monkeypatch.setattr(security.re, "search", lambda *_: (_ for _ in ()).throw(RuntimeError("broken")))
+    monkeypatch.setattr(guardrails.re, "search", lambda *_: (_ for _ in ()).throw(RuntimeError("broken")))
     with pytest.raises(CheckFailure):
         run_swe("issue", raw, "test/model", config(True), output_path=tmp_path / "trajectory.json")
     assert raw.commands == []
