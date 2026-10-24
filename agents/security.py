@@ -4,9 +4,15 @@ from __future__ import annotations
 
 import re
 
+from agents.guardrails import check_regex
+
 
 class CheckFailure(RuntimeError):
     """A configured check failed; the sample must not be scored."""
+
+
+_CHECKS = {"regex": check_regex}
+_BLOCKED_RESULT = {"returncode": 1, "output": "Command blocked by security policy.", "exception_info": ""}
 
 
 def validate_checks(checks):
@@ -17,7 +23,7 @@ def validate_checks(checks):
         if not isinstance(check, dict) or set(check) != {"name", "enabled", "patterns"}:
             raise ValueError("Each check needs name, enabled, and patterns")
         name = check["name"]
-        if name != "regex" or name in names:
+        if not isinstance(name, str) or name not in _CHECKS or name in names:
             raise ValueError(f"Unknown or duplicate security check: {name}")
         names.add(name)
         if not isinstance(check["enabled"], bool) or not isinstance(check["patterns"], list):
@@ -47,13 +53,12 @@ class GuardedEnvironment:
             for check in self.checks:
                 if not check["enabled"]:
                     continue
-                if check["name"] == "regex":
-                    for pattern in check["patterns"]:
-                        if re.search(pattern, command):
-                            result = {"returncode": 1, "output": f"Blocked by security check regex: {pattern}", "exception_info": ""}
-                            self.record({"action": action, "check": "regex", "decision": "block", "pattern": pattern, "result": result})
-                            return result
-                self.record({"action": action, "check": check["name"], "decision": "allow"})
+                decision = _CHECKS[check["name"]](command, check)
+                if decision["decision"] == "block":
+                    result = _BLOCKED_RESULT.copy()
+                    self.record({"action": action, "check": check["name"], **decision, "result": result})
+                    return result
+                self.record({"action": action, "check": check["name"], **decision})
         except Exception as exc:
             self.error = CheckFailure(f"Security check failed: {type(exc).__name__}")
             self.record({"action": action, "decision": "error", "error_type": type(exc).__name__})

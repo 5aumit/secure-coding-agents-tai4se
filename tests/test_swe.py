@@ -7,7 +7,7 @@ import anyio
 import pytest
 
 from agents.agent import InspectEnvironment, _messages_for_scorer
-from agents.security import CheckFailure
+from agents.security import CheckFailure, GuardedEnvironment
 from agents.swe import load_config, run_swe
 
 
@@ -44,6 +44,37 @@ class FakeEnvironment:
 
 def config(enabled=False):
     return {"model": "test/model", "limits": {"steps": 4, "seconds": 30, "cost_usd": 1}, "security": {"checks": [{"name": "regex", "enabled": enabled, "patterns": ["forbidden"]}]}}
+
+
+@pytest.mark.parametrize("enabled,patterns,blocked_pattern", [
+    (False, ["forbidden"], None),
+    (True, [], None),
+    (True, ["absent"], None),
+    (True, ["absent", "forbidden", "forbid"], "forbidden"),
+    (True, [""], ""),
+])
+def test_guarded_environment_decisions_and_forwarding(enabled, patterns, blocked_pattern):
+    calls, decisions = [], []
+    result = {"output": "ok", "returncode": 0, "exception_info": ""}
+
+    class Environment:
+        def execute(self, action, **kwargs):
+            calls.append((action, kwargs))
+            return result
+
+    action = {"command": "echo forbidden", "tool_call_id": "call-1"}
+    guarded = GuardedEnvironment(Environment(), [{"name": "regex", "enabled": enabled, "patterns": patterns}], decisions.append)
+    actual = guarded.execute(action, timeout=7)
+    if blocked_pattern is not None:
+        expected = {"returncode": 1, "output": "Command blocked by security policy.", "exception_info": ""}
+        assert actual == expected
+        assert decisions == [{"action": action, "check": "regex", "decision": "block", "pattern": blocked_pattern, "result": expected}]
+        assert calls == []
+    else:
+        assert actual is result
+        assert calls == [(action, {"timeout": 7})]
+        expected = [{"action": action, "check": "regex", "decision": "allow"}] if enabled else []
+        assert decisions == expected + [{"action": action, "decision": "execute"}]
 
 
 @pytest.mark.parametrize("enabled,executed", [(False, True), (True, False)])
@@ -102,7 +133,7 @@ def test_inspect_path_uses_workspace_and_preserves_scorer_inputs(monkeypatch):
         assert all(call[1]["cwd"] == "/workspace" for call in sbx.calls)
         messages = _messages_for_scorer(run["agent"].messages)
         assert messages[0].tool_calls[0].arguments == {"command": "forbidden"}
-        assert "Blocked by security check regex" in messages[1].content
+        assert messages[1].content == '{\n  "returncode": 1,\n  "output": "Command blocked by security policy."\n}'
 
     anyio.run(check)
 
