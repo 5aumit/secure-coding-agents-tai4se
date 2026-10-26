@@ -14,7 +14,7 @@ from inspect_ai.model import GenerateConfig, ModelOutput, ModelUsage
 from inspect_ai.tool._tool_call import ToolCallError
 from inspect_ai.scorer import Score
 
-from agents.tracing import LangfuseHooks, validate_langfuse_config
+from agents.tracing import LangfuseHooks, trace_attributes, validate_langfuse_config
 
 
 @pytest.fixture(autouse=True)
@@ -188,4 +188,16 @@ def test_readable_sessions_group_samples_and_keep_runs_distinct(monkeypatch, lab
     elif label == "smoke":
         assert " / smoke / " in first
     assert attributes[0]["metadata"]["inspect_run_id"] == "run-1"
+    assert attributes[0]["tags"] == ["codeipi", "inspect"]
     assert [root.params["name"] for root in client.roots] == ["a", "b", "c"]
+
+
+def test_issuetrojan_sessions_share_codeipi_format(monkeypatch):
+    monkeypatch.setenv("EXPERIMENT_NAME", "smoke")
+    attributes = trace_attributes(
+        "issuetrojan", "openrouter/openai/gpt-oss-20b", "abc123", ["stock-mini", "github_issue"]
+    )
+    assert attributes == {
+        "session_id": "issuetrojan / gpt-oss-20b / smoke / abc123",
+        "tags": ["issuetrojan", "stock-mini", "github_issue"],
+    }

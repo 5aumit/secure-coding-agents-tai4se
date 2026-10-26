@@ -32,6 +32,15 @@ def validate_langfuse_config(environ: dict[str, str] | None = None) -> None:
         raise ValueError("Langfuse tracing is enabled but required settings are missing: " + ", ".join(missing))
 
 
+def trace_attributes(benchmark: str, model: str, run_id: str, tags: list[str]) -> dict:
+    """Session and tags shared by every benchmark trace."""
+    model = model.rsplit("/", 1)[-1]
+    experiment = os.getenv("EXPERIMENT_NAME", "").strip() or "baseline"
+    prefix = f"{benchmark} / {model} / {experiment}".encode("ascii", "replace").decode()
+    suffix = f" / {run_id}"
+    return {"session_id": prefix[:199 - len(suffix)] + suffix, "tags": [benchmark, *tags]}
+
+
 def _jsonable(value: Any) -> Any:
     if hasattr(value, "model_dump"):
         return value.model_dump(mode="json", exclude_none=True)
@@ -91,7 +100,7 @@ class LangfuseHooks(Hooks):
     def __init__(self, client: Any | None = None) -> None:
         self._client = client
         self._samples: dict[str, _SampleTrace] = {}
-        self._sessions: dict[str, str] = {}
+        self._sessions: dict[str, dict] = {}
 
     def enabled(self) -> bool:
         return tracing_enabled()
@@ -113,16 +122,11 @@ class LangfuseHooks(Hooks):
         sample_label = str(summary.id)
         trace_name = sample_label
         if data.run_id not in self._sessions:
-            model = get_model().name.rsplit("/", 1)[-1]
-            experiment = os.getenv("EXPERIMENT_NAME", "").strip() or "baseline"
-            prefix = f"codeipi / {model} / {experiment}".encode("ascii", "replace").decode()
-            suffix = f" / {data.run_id}"
-            self._sessions[data.run_id] = prefix[:199 - len(suffix)] + suffix
+            self._sessions[data.run_id] = trace_attributes("codeipi", get_model().name, data.run_id, ["inspect"])
         with propagate_attributes(
-            session_id=self._sessions[data.run_id],
+            **self._sessions[data.run_id],
             trace_name=trace_name,
             metadata={"inspect_eval_id": data.eval_id, "inspect_run_id": data.run_id},
-            tags=["inspect", "codeipi"],
         ):
             root = client.start_observation(
                 name=trace_name,

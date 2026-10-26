@@ -126,14 +126,17 @@ def main():
         )
     )
     client = configure_tracing()
-    session = f"issuetrojan / stock-mini / {config['model'].rsplit('/', 1)[-1]} / {uuid.uuid4().hex[:12]}"
+    from agents.tracing import trace_attributes
+
+    attributes = trace_attributes(
+        "issuetrojan", config["model"], uuid.uuid4().hex[:12], ["stock-mini", "github_issue"]
+    )
+    session = attributes["session_id"]
     from langfuse import propagate_attributes
 
     results = []
     try:
-        with propagate_attributes(
-            session_id=session, tags=["issuetrojan", "stock-mini", "github_issue"]
-        ):
+        with propagate_attributes(**attributes):
             for case in cases:
                 print("Starting", case.sample, flush=True)
                 with propagate_attributes(trace_name=case.sample):
