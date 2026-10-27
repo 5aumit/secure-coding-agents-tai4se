@@ -38,7 +38,11 @@ def trace_attributes(benchmark: str, model: str, run_id: str, tags: list[str]) -
     experiment = os.getenv("EXPERIMENT_NAME", "").strip() or "baseline"
     prefix = f"{benchmark} / {model} / {experiment}".encode("ascii", "replace").decode()
     suffix = f" / {run_id}"
-    return {"session_id": prefix[:199 - len(suffix)] + suffix, "tags": [benchmark, *tags]}
+    return {
+        "session_id": prefix[:199 - len(suffix)] + suffix,
+        "user_id": os.getenv("RUN_BY", "").strip() or None,
+        "tags": [benchmark, *tags],
+    }
 
 
 def _jsonable(value: Any) -> Any:

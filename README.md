@@ -107,7 +107,10 @@ export LANGFUSE_TRACING_ENABLED=true
 export LANGFUSE_PUBLIC_KEY='your-public-key'
 export LANGFUSE_SECRET_KEY='your-secret-key'
 export LANGFUSE_BASE_URL='https://cloud.langfuse.com'
+export RUN_BY='your-name'
 ```
+
+`RUN_BY` sets the Langfuse user, so each teammate's runs appear under their name.
 
 Each run has a session with one trace per sample. Traces record task text, model
 calls, tool results, guardrail decisions, and scores. For CodeIPI, set
