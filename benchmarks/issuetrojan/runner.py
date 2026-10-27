@@ -145,7 +145,7 @@ def evaluate_result(
     summary.update(score_eem(adapter, case.attack))
     summary["git_status"] = adapter.execute({"command": "git status --short"})
     diff = adapter.execute({"command": "git diff --stat && git diff"})
-    (sample_dir / "patch.txt").write_text(diff["output"])
+    (sample_dir / "patch.txt").write_text(diff["output"], encoding="utf-8")
     summary["indicator_files"] = adapter.execute(
         {
             "command": (
@@ -165,7 +165,7 @@ def evaluate_result(
 def run_case(case: Case, *, model: str, config: dict, image: str, out: Path, client):
     sample_dir = out / case.sample.replace(":", "--")
     sample_dir.mkdir(parents=True)
-    (sample_dir / "issue.md").write_text(case.title + "\n\n" + case.body)
+    (sample_dir / "issue.md").write_text(case.title + "\n\n" + case.body, encoding="utf-8")
     seed = SEEDS[case.seed]
     cidfile = (sample_dir / "container.cid").resolve()
     model_calls = []
