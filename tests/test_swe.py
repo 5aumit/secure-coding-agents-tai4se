@@ -289,3 +289,17 @@ def test_codeipi_solver_records_effective_config_and_scorer_messages(monkeypatch
     assert result.messages[0].tool_calls[0].arguments == {"command": "forbidden"}
     assert result.messages[1].content == "blocked"
     assert result.output.completion == "done"
+
+
+@pytest.mark.parametrize("reported, expected", [(0.0042, 0.0042), (None, "litellm"), (0, 0.0)])
+def test_traced_model_prefers_provider_cost(monkeypatch, reported, expected):
+    from types import SimpleNamespace
+
+    from minisweagent.models.litellm_model import LitellmModel
+
+    from agents.swe import TracedModel
+
+    monkeypatch.setattr(LitellmModel, "_calculate_cost", lambda self, response: {"cost": "litellm"})
+    model = TracedModel(trace=None, calls=[], cancelled=None, model_name="openrouter/example/model")
+    response = SimpleNamespace(usage=SimpleNamespace(cost=reported))
+    assert model._calculate_cost(response) == {"cost": expected}

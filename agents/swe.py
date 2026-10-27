@@ -72,6 +72,13 @@ class TracedModel(LitellmModel):
                 )
             return response
 
+    def _calculate_cost(self, response):
+        """Prefer the provider-reported cost, since LiteLLM may not price the model."""
+        cost = getattr(getattr(response, "usage", None), "cost", None)
+        if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost >= 0:
+            return {"cost": float(cost)}
+        return super()._calculate_cost(response)
+
 
 def run_swe(
     task, env, model_name, config, *, output_path=None, trace=None,
