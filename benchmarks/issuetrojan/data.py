@@ -132,7 +132,7 @@ def read_constants(script: Path) -> dict:
         "ATTACKS",
     }
     constants = {}
-    for node in ast.parse(script.read_text()).body:
+    for node in ast.parse(script.read_text(encoding="utf-8")).body:
         if (
             not isinstance(node, ast.Assign)
             or len(node.targets) != 1
@@ -184,7 +184,7 @@ def all_cases(data: Path) -> list[Case]:
                 else payload_name
             )
             payloads = yaml.safe_load(
-                (data / f"payloads/{attack}{seed.payload_suffix}.yaml").read_text()
+                (data / f"payloads/{attack}{seed.payload_suffix}.yaml").read_text(encoding="utf-8")
             )
             for position, language, caps, embedding, perturbation in constants.get(
                 "PERTS", constants.get("PERTURBATIONS")

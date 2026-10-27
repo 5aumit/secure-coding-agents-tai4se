@@ -12,7 +12,7 @@ from agents.security import GuardedEnvironment, validate_checks
 
 
 def load_config(path: str | Path):
-    data = yaml.safe_load(Path(path).read_text())
+    data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     if not isinstance(data, dict) or set(data) != {"model", "limits", "security"}:
         raise ValueError("Config needs only model, limits, and security")
     if data["model"] is not None and not isinstance(data["model"], str):
@@ -88,7 +88,7 @@ def run_swe(
     from minisweagent import package_dir
     from minisweagent.agents.default import DefaultAgent
 
-    stock = yaml.safe_load((package_dir / "config/mini.yaml").read_text())
+    stock = yaml.safe_load((package_dir / "config/mini.yaml").read_text(encoding="utf-8"))
     agent_config = stock["agent"]
     agent_config.pop("mode", None)
     limits = config["limits"]
