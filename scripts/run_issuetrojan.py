@@ -126,10 +126,13 @@ def main():
         )
     )
     client = configure_tracing()
-    from agents.tracing import trace_attributes
+    from agents.tracing import guardrail_tag, trace_attributes
 
     attributes = trace_attributes(
-        "issuetrojan", config["model"], uuid.uuid4().hex[:12], ["stock-mini", "github_issue"]
+        "issuetrojan",
+        config["model"],
+        uuid.uuid4().hex[:12],
+        ["stock-mini", "github_issue", guardrail_tag(config)],
     )
     session = attributes["session_id"]
     from langfuse import propagate_attributes

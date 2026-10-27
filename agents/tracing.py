@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from inspect_ai.event import ModelEvent, ToolEvent
-from inspect_ai.hooks import Hooks, RunEnd, SampleEnd, SampleEvent, SampleScoring, SampleStart, hooks
+from inspect_ai.hooks import Hooks, RunEnd, SampleEnd, SampleEvent, SampleScoring, SampleStart, TaskStart, hooks
 from inspect_ai.model import get_model
 
 
@@ -43,6 +43,12 @@ def trace_attributes(benchmark: str, model: str, run_id: str, tags: list[str]) -
         "user_id": os.getenv("RUN_BY", "").strip() or None,
         "tags": [benchmark, *tags],
     }
+
+
+def guardrail_tag(config: dict) -> str:
+    """Name the enabled security checks, e.g. guardrail:regex or guardrail:none."""
+    enabled = [check["name"] for check in config["security"]["checks"] if check["enabled"]]
+    return "guardrail:" + ("+".join(enabled) or "none")
 
 
 def _jsonable(value: Any) -> Any:
@@ -105,6 +111,7 @@ class LangfuseHooks(Hooks):
         self._client = client
         self._samples: dict[str, _SampleTrace] = {}
         self._sessions: dict[str, dict] = {}
+        self._guardrails: dict[str, str] = {}
 
     def enabled(self) -> bool:
         return tracing_enabled()
@@ -116,6 +123,13 @@ class LangfuseHooks(Hooks):
             self._client = get_client()
         return self._client
 
+    async def on_task_start(self, data: TaskStart) -> None:
+        config_path = (data.spec.solver_args or {}).get("config_path")
+        if config_path:
+            from agents.swe import load_config
+
+            self._guardrails[data.run_id] = guardrail_tag(load_config(config_path))
+
     async def on_sample_start(self, data: SampleStart) -> None:
         if not self.enabled():
             return
@@ -126,7 +140,8 @@ class LangfuseHooks(Hooks):
         sample_label = str(summary.id)
         trace_name = sample_label
         if data.run_id not in self._sessions:
-            self._sessions[data.run_id] = trace_attributes("codeipi", get_model().name, data.run_id, ["inspect"])
+            tags = ["inspect", self._guardrails.get(data.run_id, "guardrail:unknown")]
+            self._sessions[data.run_id] = trace_attributes("codeipi", get_model().name, data.run_id, tags)
         with propagate_attributes(
             **self._sessions[data.run_id],
             trace_name=trace_name,
@@ -268,6 +283,7 @@ class LangfuseHooks(Hooks):
 
     async def on_run_end(self, data: RunEnd) -> None:
         self._sessions.pop(data.run_id, None)
+        self._guardrails.pop(data.run_id, None)
         if not self.enabled():
             return
         client = self._client

@@ -7,14 +7,14 @@ from contextlib import contextmanager
 from dataclasses import replace
 
 from inspect_ai.event import ModelEvent, ToolEvent
-from inspect_ai.hooks import RunEnd, SampleEnd, SampleEvent, SampleScoring, SampleStart
+from inspect_ai.hooks import RunEnd, SampleEnd, SampleEvent, SampleScoring, SampleStart, TaskStart
 from inspect_ai.log import EvalSample
 from inspect_ai._util.error import EvalError
 from inspect_ai.model import GenerateConfig, ModelOutput, ModelUsage
 from inspect_ai.tool._tool_call import ToolCallError
 from inspect_ai.scorer import Score
 
-from agents.tracing import LangfuseHooks, trace_attributes, validate_langfuse_config
+from agents.tracing import LangfuseHooks, guardrail_tag, trace_attributes, validate_langfuse_config
 
 
 @pytest.fixture(autouse=True)
@@ -188,7 +188,7 @@ def test_readable_sessions_group_samples_and_keep_runs_distinct(monkeypatch, lab
     elif label == "smoke":
         assert " / smoke / " in first
     assert attributes[0]["metadata"]["inspect_run_id"] == "run-1"
-    assert attributes[0]["tags"] == ["codeipi", "inspect"]
+    assert attributes[0]["tags"] == ["codeipi", "inspect", "guardrail:unknown"]
     assert [root.params["name"] for root in client.roots] == ["a", "b", "c"]
 
 
@@ -203,6 +203,45 @@ def test_issuetrojan_sessions_share_codeipi_format(monkeypatch):
         "user_id": "morgan",
         "tags": ["issuetrojan", "stock-mini", "github_issue"],
     }
+
+
+def checks_config(*enabled):
+    names = ["regex", "llm"]
+    return {"security": {"checks": [
+        {"name": name, "enabled": name in enabled, "patterns": []} for name in names
+    ]}}
+
+
+@pytest.mark.parametrize("enabled, tag", [
+    ((), "guardrail:none"),
+    (("regex",), "guardrail:regex"),
+    (("regex", "llm"), "guardrail:regex+llm"),
+])
+def test_guardrail_tag_names_enabled_checks(enabled, tag):
+    assert guardrail_tag(checks_config(*enabled)) == tag
+
+
+def test_codeipi_sessions_tag_guardrails_from_solver_config(monkeypatch, tmp_path):
+    monkeypatch.setenv("LANGFUSE_TRACING_ENABLED", "true")
+    config = tmp_path / "regex.yaml"
+    config.write_text(
+        "model: null\n"
+        "limits: {steps: 1, seconds: 1, cost_usd: 0.01}\n"
+        "security:\n  checks:\n    - {name: regex, enabled: true, patterns: ['rm -rf']}\n"
+    )
+    attributes = []
+
+    @contextmanager
+    def capture_attributes(**kwargs):
+        attributes.append(kwargs)
+        yield
+
+    monkeypatch.setattr("langfuse.propagate_attributes", capture_attributes)
+    hook = LangfuseHooks(FakeClient())
+    spec = SimpleNamespace(solver_args={"config_path": str(config)})
+    run(hook.on_task_start(TaskStart(None, "run-1", "eval-1", spec, None)))
+    run(hook.on_sample_start(sample_start("a")))
+    assert attributes[0]["tags"] == ["codeipi", "inspect", "guardrail:regex"]
 
 
 def test_missing_run_by_leaves_user_unset(monkeypatch):
