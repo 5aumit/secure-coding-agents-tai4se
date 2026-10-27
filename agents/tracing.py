@@ -33,10 +33,9 @@ def validate_langfuse_config(environ: dict[str, str] | None = None) -> None:
         raise ValueError("Langfuse tracing is enabled but required settings are missing: " + ", ".join(missing))
 
 
-def trace_attributes(benchmark: str, model: str, run_id: str, tags: list[str]) -> dict:
+def trace_attributes(benchmark: str, model: str, experiment: str, run_id: str, tags: list[str]) -> dict:
     """Session and tags shared by every benchmark trace."""
     model = model.rsplit("/", 1)[-1]
-    experiment = os.getenv("EXPERIMENT_NAME", "").strip() or "baseline"
     prefix = f"{benchmark} / {model} / {experiment}".encode("ascii", "replace").decode()
     suffix = f" / {run_id}"
     return {
@@ -112,7 +111,7 @@ class LangfuseHooks(Hooks):
         self._client = client
         self._samples: dict[str, _SampleTrace] = {}
         self._sessions: dict[str, dict] = {}
-        self._guardrails: dict[str, str] = {}
+        self._configs: dict[str, dict] = {}
 
     def enabled(self) -> bool:
         return tracing_enabled()
@@ -129,7 +128,7 @@ class LangfuseHooks(Hooks):
         if config_path:
             from agents.swe import load_config
 
-            self._guardrails[data.run_id] = guardrail_tag(load_config(config_path))
+            self._configs[data.run_id] = load_config(config_path)
 
     async def on_sample_start(self, data: SampleStart) -> None:
         if not self.enabled():
@@ -141,8 +140,10 @@ class LangfuseHooks(Hooks):
         sample_label = str(summary.id)
         trace_name = sample_label
         if data.run_id not in self._sessions:
-            tags = ["agent:mini-swe-agent", "harness:inspect", self._guardrails.get(data.run_id, "guardrail:unknown")]
-            self._sessions[data.run_id] = trace_attributes("codeipi", get_model().name, data.run_id, tags)
+            config = self._configs.get(data.run_id)
+            experiment = config["experiment"] if config else "unknown"
+            tags = ["agent:mini-swe-agent", "harness:inspect", guardrail_tag(config) if config else "guardrail:unknown"]
+            self._sessions[data.run_id] = trace_attributes("codeipi", get_model().name, experiment, data.run_id, tags)
         attributes = {
             **self._sessions[data.run_id],
             "trace_name": trace_name,
@@ -287,7 +288,7 @@ class LangfuseHooks(Hooks):
 
     async def on_run_end(self, data: RunEnd) -> None:
         self._sessions.pop(data.run_id, None)
-        self._guardrails.pop(data.run_id, None)
+        self._configs.pop(data.run_id, None)
         if not self.enabled():
             return
         client = self._client

@@ -131,6 +131,7 @@ def main():
     attributes = trace_attributes(
         "issuetrojan",
         config["model"],
+        config["experiment"],
         uuid.uuid4().hex[:12],
         ["agent:mini-swe-agent", "github_issue", guardrail_tag(config)],
     )

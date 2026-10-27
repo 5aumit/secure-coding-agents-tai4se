@@ -25,12 +25,15 @@ Or copy `.env.example` to `.env`, fill it in, and load it with
 
 ## Configure the agent
 
-Both runners read `configs/default.yaml`. It sets the model, step limit, time
-limit, cost limit, and security checks. The default model is
+Both runners read `configs/default.yaml`. It sets the experiment name, model,
+step limit, time limit, cost limit, and security checks. The default model is
 `openrouter/openai/gpt-oss-20b`. Guardrails are disabled by default.
 
 Copy the config to create an experiment configuration. Pass it to either runner
 with `--config path/to/config.yaml`. Enable or disable checks in that file.
+Set `experiment` to a short, lowercase, hyphenated name for the setting being
+tested, such as `regex-v1`. Reuse it across benchmarks and models that should be
+compared.
 See [the agent guide](agents/README.md) to configure, add, or edit guardrails.
 
 To change models, pass a `provider/model` identifier as CodeIPI's first argument
@@ -110,7 +113,6 @@ export LANGFUSE_PUBLIC_KEY='your-public-key'
 export LANGFUSE_SECRET_KEY='your-secret-key'
 export LANGFUSE_BASE_URL='https://cloud.langfuse.com'
 export RUN_BY='your-name'
-export EXPERIMENT_NAME='regex-v1'
 ```
 
 Each run creates a Langfuse session with one trace per sample. Traces record task
@@ -118,10 +120,9 @@ text, model calls, commands, guardrail decisions, and scores. Local results rema
 available without Langfuse.
 
 Sessions are named `benchmark / model / experiment / run-id`, for example
-`codeipi / gpt-oss-20b / regex-v1 / a1b2c3`. `RUN_BY` sets the Langfuse user, so
-each teammate's runs appear under their name. `EXPERIMENT_NAME` defaults to
-`baseline`. Use a short, lowercase, hyphenated name that describes the setting
-being tested, and reuse it across benchmarks and models that should be compared.
+`codeipi / gpt-oss-20b / regex-v1 / a1b2c3`. The experiment name comes from
+`experiment` in the config file. `RUN_BY` sets the Langfuse user, so each
+teammate's runs appear under their name.
 
 Traces also have these tags:
 

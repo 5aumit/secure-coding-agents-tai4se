@@ -157,13 +157,8 @@ def test_enabled_tracing_requires_keys_and_endpoint():
     assert "pk-lf" not in message
 
 
-@pytest.mark.parametrize("label", [None, "smoke", "experiment-" + "x" * 250 + "é"])
-def test_readable_sessions_group_samples_and_keep_runs_distinct(monkeypatch, label):
+def test_readable_sessions_group_samples_and_keep_runs_distinct(monkeypatch):
     monkeypatch.setenv("LANGFUSE_TRACING_ENABLED", "true")
-    if label is None:
-        monkeypatch.delenv("EXPERIMENT_NAME", raising=False)
-    else:
-        monkeypatch.setenv("EXPERIMENT_NAME", label)
     attributes = []
 
     @contextmanager
@@ -182,27 +177,28 @@ def test_readable_sessions_group_samples_and_keep_runs_distinct(monkeypatch, lab
     assert first != third
     assert first.startswith("codeipi / qwen3-coder-30b-a3b-instruct / ")
     assert first.endswith(" / run-1") and third.endswith(" / run-2")
-    assert first.isascii() and len(first) < 200
-    if label is None:
-        assert " / baseline / " in first
-    elif label == "smoke":
-        assert " / smoke / " in first
+    assert " / unknown / " in first
     assert attributes[0]["metadata"]["inspect_run_id"] == "run-1"
     assert attributes[0]["tags"] == ["codeipi", "agent:mini-swe-agent", "harness:inspect", "guardrail:unknown"]
     assert [root.params["name"] for root in client.roots] == ["a", "b", "c"]
 
 
 def test_issuetrojan_sessions_share_codeipi_format(monkeypatch):
-    monkeypatch.setenv("EXPERIMENT_NAME", "smoke")
     monkeypatch.setenv("RUN_BY", "morgan")
     attributes = trace_attributes(
-        "issuetrojan", "openrouter/openai/gpt-oss-20b", "abc123", ["agent:mini-swe-agent", "github_issue"]
+        "issuetrojan", "openrouter/openai/gpt-oss-20b", "smoke", "abc123", ["agent:mini-swe-agent", "github_issue"]
     )
     assert attributes == {
         "session_id": "issuetrojan / gpt-oss-20b / smoke / abc123",
         "user_id": "morgan",
         "tags": ["issuetrojan", "agent:mini-swe-agent", "github_issue"],
     }
+
+
+def test_long_experiment_names_keep_sessions_short_and_ascii():
+    session = trace_attributes("codeipi", "model", "experiment-" + "x" * 250 + "é", "run-1", [])["session_id"]
+    assert session.isascii() and len(session) < 200
+    assert session.endswith(" / run-1")
 
 
 def checks_config(*enabled):
@@ -221,10 +217,11 @@ def test_guardrail_tag_names_enabled_checks(enabled, tag):
     assert guardrail_tag(checks_config(*enabled)) == tag
 
 
-def test_codeipi_sessions_tag_guardrails_from_solver_config(monkeypatch, tmp_path):
+def test_codeipi_sessions_use_solver_config(monkeypatch, tmp_path):
     monkeypatch.setenv("LANGFUSE_TRACING_ENABLED", "true")
     config = tmp_path / "regex.yaml"
     config.write_text(
+        "experiment: regex-v1\n"
         "model: null\n"
         "limits: {steps: 1, seconds: 1, cost_usd: 0.01}\n"
         "security:\n  checks:\n    - {name: regex, enabled: true, patterns: ['rm -rf']}\n"
@@ -241,12 +238,13 @@ def test_codeipi_sessions_tag_guardrails_from_solver_config(monkeypatch, tmp_pat
     spec = SimpleNamespace(solver_args={"config_path": str(config)})
     run(hook.on_task_start(TaskStart(None, "run-1", "eval-1", spec, None)))
     run(hook.on_sample_start(sample_start("a")))
+    assert " / regex-v1 / " in attributes[0]["session_id"]
     assert attributes[0]["tags"] == ["codeipi", "agent:mini-swe-agent", "harness:inspect", "guardrail:regex"]
 
 
 def test_missing_run_by_leaves_user_unset(monkeypatch):
     monkeypatch.delenv("RUN_BY", raising=False)
-    assert trace_attributes("codeipi", "model", "run-1", [])["user_id"] is None
+    assert trace_attributes("codeipi", "model", "baseline", "run-1", [])["user_id"] is None
 
 
 def test_codeipi_solver_runs_agent_inside_trace_attributes(monkeypatch):
