@@ -1,31 +1,26 @@
 # Contributing
 
-Keep each change focused on one issue. Link the issue in your pull request.
+Keep changes focused and easy to review. Link the relevant issue when one exists.
 
 ## Set up
 
-Follow the [README](README.md) to create the Python 3.12 environment and set up
-Docker. Install the test dependencies:
+Follow the [README](README.md) to set up Python 3.12 and Docker. Install test dependencies:
 
 ```bash
 python -m pip install -e '.[test]'
 ```
 
-Keep API keys in your shell or an ignored `.env` file. Do not commit credentials
-or private trace content.
+Keep API keys in your shell or an ignored `.env` file. Never commit credentials or private trace content.
 
 ## Make changes
 
-Create a branch from `main`. Keep benchmark-specific changes in their adapters.
-Put shared agent and guardrail changes in `agents/`.
+Create a branch from `origin/dev`. Keep benchmark-specific changes in their adapters and shared agent or guardrail changes in `agents/`.
 
-For guardrail changes, follow the [agent guide](agents/README.md). Check allowed
-commands, blocked commands, disabled checks, and error handling. Preserve the
-generic block message and detailed internal records.
+For guardrail changes, follow the [agent guide](agents/README.md). Test that malicious commands are blocked without unnecessarily blocking legitimate commands. Verify disabled checks, error handling, generic block feedback, and internal records. Check failures must stop the sample rather than silently allowing execution.
 
-Copy `configs/default.yaml` for experiment settings. Keep the default guardrails
-disabled. Update existing documentation when your change affects setup,
-configuration, or scoring.
+Copy `configs/default.yaml` for experiment settings. Keep default guardrails disabled. Update existing documentation when changes affect setup, configuration, behavior, or scoring.
+
+Prefer simple solutions over unnecessary abstractions, dependencies, or scaffolding. Follow existing patterns unless there is a clear reason to change them.
 
 ## Verify
 
@@ -36,29 +31,39 @@ python -m pytest tests -q
 git diff --check
 ```
 
-For runner changes, also run one sample from the affected benchmark when
-credentials and Docker are available. Use the commands in the README.
-Report any checks you could not run.
+For runner or integration changes, also run a sample from the affected benchmark when credentials and Docker are available. Use the commands in the README.
+
+Report checks actually performed, their results, and anything you could not verify. Distinguish unit tests from live benchmark runs.
 
 ## Record experiments
 
-Keep the model, samples, and limits identical when comparing guardrails.
-Record the run ID, full configuration, code revision, benchmark revision,
-installed package versions, and selected sample IDs with the results.
-Record a repeat number for repeated experiments.
+Keep the model, selected samples, limits, and other experimental settings identical when comparing guardrail configurations, unless the changed setting is the variable being studied.
 
-Keep raw logs and results under the ignored `logs/` or `outputs/` directories.
-Include Langfuse trace links when available. Inspect commands and outputs
-alongside scores. A blocked command can count as compliance in CodeIPI.
-IssueTrojan's EEM score checks file existence, not execution or task correctness.
-Keep failed and unscored samples visible in analysis.
+Record the run ID, configuration, code revision, benchmark revision, package versions, selected samples, and repeat number when applicable.
+
+Keep raw logs and results under the ignored `logs/` or `outputs/` directories. Include Langfuse trace links when available.
+
+Inspect commands, outputs, and guardrail decisions alongside scores. Distinguish attempted attacks, successfully executed attacks, and legitimate task completion.
+
+Be aware of benchmark limitations:
+
+- **CodeIPI:** A blocked command may still count as compliance because the scorer examines attempted tool calls.
+- **IssueTrojanBench:** EEM checks file existence, not whether a malicious command executed or the legitimate task succeeded.
+
+Keep failed and unscored samples visible in analysis. Do not draw conclusions from scores beyond what the benchmark actually measures.
 
 ## Open a pull request
 
-Use a short title and link the related issue. Include these sections:
+Target `dev` (`origin/dev`), never `main`.
 
-- **How it works:** State the change and point to the relevant files.
-- **Why this is ready:** List verification results and remaining limitations.
+Keep PRs focused, use a descriptive title, and link the relevant issue when one exists.
 
-Exclude generated results, downloaded benchmarks, credentials, and unrelated
-changes from the diff.
+Include:
+
+- **What and why:** Explain the problem, what changed, and important design decisions.
+- **Verification:** Report checks actually run and their results. Include benchmark evidence when relevant.
+- **Limitations:** Note known issues, untested behavior, and anything requiring closer review.
+
+Explain decisions rather than narrating the diff. Link to relevant code when useful, and keep descriptions proportional to the change.
+
+Exclude generated results, downloaded benchmarks, credentials, and unrelated changes from the diff.
