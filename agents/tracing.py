@@ -13,6 +13,7 @@ from inspect_ai.model import get_model
 
 
 current_agent_trace = ContextVar("current_agent_trace", default=None)
+current_trace_attributes = ContextVar("current_trace_attributes", default=None)
 
 
 def tracing_enabled() -> bool:
@@ -142,11 +143,12 @@ class LangfuseHooks(Hooks):
         if data.run_id not in self._sessions:
             tags = ["agent:mini-swe-agent", "harness:inspect", self._guardrails.get(data.run_id, "guardrail:unknown")]
             self._sessions[data.run_id] = trace_attributes("codeipi", get_model().name, data.run_id, tags)
-        with propagate_attributes(
+        attributes = {
             **self._sessions[data.run_id],
-            trace_name=trace_name,
-            metadata={"inspect_eval_id": data.eval_id, "inspect_run_id": data.run_id},
-        ):
+            "trace_name": trace_name,
+            "metadata": {"inspect_eval_id": data.eval_id, "inspect_run_id": data.run_id},
+        }
+        with propagate_attributes(**attributes):
             root = client.start_observation(
                 name=trace_name,
                 as_type="span",
@@ -163,11 +165,12 @@ class LangfuseHooks(Hooks):
                     "scoring_phase": "pending",
                 },
             )
-        state = _SampleTrace(root=root, sample_id=sample_label)
-        state.agent = root.start_observation(
-            name="stock mini-swe-agent", as_type="agent", input={"task": _jsonable(summary.input)}
-        )
+            state = _SampleTrace(root=root, sample_id=sample_label)
+            state.agent = root.start_observation(
+                name="stock mini-swe-agent", as_type="agent", input={"task": _jsonable(summary.input)}
+            )
         current_agent_trace.set(state.agent)
+        current_trace_attributes.set(attributes)
         self._samples[data.sample_id] = state
 
     async def on_sample_event(self, data: SampleEvent) -> None:
@@ -244,6 +247,7 @@ class LangfuseHooks(Hooks):
 
     async def on_sample_end(self, data: SampleEnd) -> None:
         current_agent_trace.set(None)
+        current_trace_attributes.set(None)
         state = self._samples.pop(data.sample_id, None)
         if state is None:
             return

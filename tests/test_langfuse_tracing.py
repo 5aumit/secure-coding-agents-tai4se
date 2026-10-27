@@ -247,3 +247,37 @@ def test_codeipi_sessions_tag_guardrails_from_solver_config(monkeypatch, tmp_pat
 def test_missing_run_by_leaves_user_unset(monkeypatch):
     monkeypatch.delenv("RUN_BY", raising=False)
     assert trace_attributes("codeipi", "model", "run-1", [])["user_id"] is None
+
+
+def test_codeipi_solver_runs_agent_inside_trace_attributes(monkeypatch):
+    import agents.agent as module
+    from agents.tracing import current_trace_attributes
+    from inspect_ai.model import ModelName
+    from inspect_ai.solver import TaskState
+
+    active = []
+    seen = {}
+
+    @contextmanager
+    def capture_attributes(**kwargs):
+        active.append(kwargs)
+        yield
+        active.pop()
+
+    def fake_run(task, env, model_name, config, **kwargs):
+        seen["attributes"] = list(active)
+        agent = type("Agent", (), {"messages": []})()
+        return {"agent": agent, "result": {"submission": "done"}}
+
+    monkeypatch.setattr("langfuse.propagate_attributes", capture_attributes)
+    monkeypatch.setattr(module, "run_swe", fake_run)
+    monkeypatch.setattr(module, "sandbox", lambda: object())
+    state = TaskState(model=ModelName("test/model"), sample_id="one", epoch=0, input="task", messages=[], metadata={})
+
+    async def check():
+        current_trace_attributes.set({"session_id": "codeipi / model / smoke / run-1", "user_id": "morgan"})
+        await module.coding_agent(model_name="override/model")(state, None)
+
+    run(check())
+    assert seen["attributes"] == [{"session_id": "codeipi / model / smoke / run-1", "user_id": "morgan"}]
+    assert active == []
