@@ -140,7 +140,7 @@ class LangfuseHooks(Hooks):
         sample_label = str(summary.id)
         trace_name = sample_label
         if data.run_id not in self._sessions:
-            tags = ["inspect", self._guardrails.get(data.run_id, "guardrail:unknown")]
+            tags = ["agent:mini-swe-agent", "harness:inspect", self._guardrails.get(data.run_id, "guardrail:unknown")]
             self._sessions[data.run_id] = trace_attributes("codeipi", get_model().name, data.run_id, tags)
         with propagate_attributes(
             **self._sessions[data.run_id],

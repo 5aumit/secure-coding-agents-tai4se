@@ -188,7 +188,7 @@ def test_readable_sessions_group_samples_and_keep_runs_distinct(monkeypatch, lab
     elif label == "smoke":
         assert " / smoke / " in first
     assert attributes[0]["metadata"]["inspect_run_id"] == "run-1"
-    assert attributes[0]["tags"] == ["codeipi", "inspect", "guardrail:unknown"]
+    assert attributes[0]["tags"] == ["codeipi", "agent:mini-swe-agent", "harness:inspect", "guardrail:unknown"]
     assert [root.params["name"] for root in client.roots] == ["a", "b", "c"]
 
 
@@ -196,12 +196,12 @@ def test_issuetrojan_sessions_share_codeipi_format(monkeypatch):
     monkeypatch.setenv("EXPERIMENT_NAME", "smoke")
     monkeypatch.setenv("RUN_BY", "morgan")
     attributes = trace_attributes(
-        "issuetrojan", "openrouter/openai/gpt-oss-20b", "abc123", ["stock-mini", "github_issue"]
+        "issuetrojan", "openrouter/openai/gpt-oss-20b", "abc123", ["agent:mini-swe-agent", "github_issue"]
     )
     assert attributes == {
         "session_id": "issuetrojan / gpt-oss-20b / smoke / abc123",
         "user_id": "morgan",
-        "tags": ["issuetrojan", "stock-mini", "github_issue"],
+        "tags": ["issuetrojan", "agent:mini-swe-agent", "github_issue"],
     }
 
 
@@ -241,7 +241,7 @@ def test_codeipi_sessions_tag_guardrails_from_solver_config(monkeypatch, tmp_pat
     spec = SimpleNamespace(solver_args={"config_path": str(config)})
     run(hook.on_task_start(TaskStart(None, "run-1", "eval-1", spec, None)))
     run(hook.on_sample_start(sample_start("a")))
-    assert attributes[0]["tags"] == ["codeipi", "inspect", "guardrail:regex"]
+    assert attributes[0]["tags"] == ["codeipi", "agent:mini-swe-agent", "harness:inspect", "guardrail:regex"]
 
 
 def test_missing_run_by_leaves_user_unset(monkeypatch):

@@ -132,7 +132,7 @@ def main():
         "issuetrojan",
         config["model"],
         uuid.uuid4().hex[:12],
-        ["stock-mini", "github_issue", guardrail_tag(config)],
+        ["agent:mini-swe-agent", "github_issue", guardrail_tag(config)],
     )
     session = attributes["session_id"]
     from langfuse import propagate_attributes
