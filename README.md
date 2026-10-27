@@ -20,6 +20,8 @@ export OPENROUTER_API_KEY='your-api-key'
 ```
 
 Set provider credentials in your shell environment before each run.
+Or copy `.env.example` to `.env`, fill it in, and load it with
+`set -a; source .env; set +a`.
 
 ## Configure the agent
 
