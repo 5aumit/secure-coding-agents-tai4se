@@ -135,6 +135,49 @@ def test_concurrent_samples_capture_model_tool_scores_and_flush(monkeypatch):
     assert client.flushed == 1
 
 
+def test_scoring_model_calls_are_recorded_separately_with_session_and_cost(monkeypatch):
+    from inspect_ai.model import ModelCall
+
+    monkeypatch.setenv("LANGFUSE_TRACING_ENABLED", "true")
+    monkeypatch.setenv("RUN_BY", "morgan")
+    active = []
+
+    @contextmanager
+    def capture_attributes(**kwargs):
+        active.append(kwargs)
+        yield
+        active.pop()
+
+    labels = []
+    original = FakeObservation.start_observation
+
+    def record_labels(self, **kwargs):
+        labels.append([item.get("session_id") for item in active])
+        return original(self, **kwargs)
+
+    monkeypatch.setattr("langfuse.propagate_attributes", capture_attributes)
+    monkeypatch.setattr(FakeObservation, "start_observation", record_labels)
+    client = FakeClient()
+    hook = LangfuseHooks(client)
+    run(hook.on_sample_start(sample_start("a")))
+    run(hook.on_sample_scoring(SampleScoring(None, "run-1", "eval-1", "a")))
+    grader = ModelEvent(
+        model="openrouter/example/model",
+        input=[], tools=[], tool_choice="auto", config=GenerateConfig(),
+        output=ModelOutput.from_content("openrouter/example/model", "GRADE: C"),
+        call=ModelCall(request={}, response={"usage": {"cost": 0.0042}}),
+    )
+    run(hook.on_sample_event(SampleEvent(None, "run-1", "eval-1", "a", grader)))
+    agent, scoring = client.roots[0].children
+    assert scoring.params == {"name": "scoring", "as_type": "evaluator"}
+    assert agent.children == []
+    generation = scoring.children[0]
+    assert generation.params["metadata"]["phase"] == "scoring"
+    assert generation.params["cost_details"] == {"total": 0.0042}
+    assert labels[-1] == [hook._sessions["run-1"]["session_id"]]
+    assert active == []
+
+
 async def sample_start_for(hook, sid):
     await hook.on_sample_start(sample_start(sid))
 
