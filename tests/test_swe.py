@@ -190,8 +190,18 @@ def test_check_failure_stops_sample_and_never_executes(tmp_path, monkeypatch):
 
 def test_invalid_config_fails_before_run(tmp_path):
     path = tmp_path / "bad.yaml"
-    path.write_text("model: test/model\nlimits: {steps: 2, seconds: 5, cost_usd: 1}\nsecurity:\n  checks:\n    - {name: llm, enabled: true, patterns: []}\n")
+    path.write_text("experiment: test\nmodel: test/model\nlimits: {steps: 2, seconds: 5, cost_usd: 1}\nsecurity:\n  checks:\n    - {name: llm, enabled: true, patterns: []}\n")
     with pytest.raises(ValueError, match="Unknown"):
+        load_config(path)
+
+
+@pytest.mark.parametrize("experiment", [None, "", "  "])
+def test_config_needs_experiment_name(tmp_path, experiment):
+    lines = [] if experiment is None else [f"experiment: '{experiment}'"]
+    lines += ["model: test/model", "limits: {steps: 2, seconds: 5, cost_usd: 1}", "security: {checks: []}"]
+    path = tmp_path / "config.yaml"
+    path.write_text("\n".join(lines) + "\n")
+    with pytest.raises(ValueError, match="experiment"):
         load_config(path)
 
 

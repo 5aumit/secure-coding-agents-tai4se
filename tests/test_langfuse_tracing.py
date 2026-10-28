@@ -7,14 +7,14 @@ from contextlib import contextmanager
 from dataclasses import replace
 
 from inspect_ai.event import ModelEvent, ToolEvent
-from inspect_ai.hooks import RunEnd, SampleEnd, SampleEvent, SampleScoring, SampleStart
+from inspect_ai.hooks import RunEnd, SampleEnd, SampleEvent, SampleScoring, SampleStart, TaskStart
 from inspect_ai.log import EvalSample
 from inspect_ai._util.error import EvalError
 from inspect_ai.model import GenerateConfig, ModelOutput, ModelUsage
 from inspect_ai.tool._tool_call import ToolCallError
 from inspect_ai.scorer import Score
 
-from agents.tracing import LangfuseHooks, validate_langfuse_config
+from agents.tracing import LangfuseHooks, guardrail_tag, trace_attributes, validate_langfuse_config
 
 
 @pytest.fixture(autouse=True)
@@ -135,6 +135,49 @@ def test_concurrent_samples_capture_model_tool_scores_and_flush(monkeypatch):
     assert client.flushed == 1
 
 
+def test_scoring_model_calls_are_recorded_separately_with_session_and_cost(monkeypatch):
+    from inspect_ai.model import ModelCall
+
+    monkeypatch.setenv("LANGFUSE_TRACING_ENABLED", "true")
+    monkeypatch.setenv("RUN_BY", "morgan")
+    active = []
+
+    @contextmanager
+    def capture_attributes(**kwargs):
+        active.append(kwargs)
+        yield
+        active.pop()
+
+    labels = []
+    original = FakeObservation.start_observation
+
+    def record_labels(self, **kwargs):
+        labels.append([item.get("session_id") for item in active])
+        return original(self, **kwargs)
+
+    monkeypatch.setattr("langfuse.propagate_attributes", capture_attributes)
+    monkeypatch.setattr(FakeObservation, "start_observation", record_labels)
+    client = FakeClient()
+    hook = LangfuseHooks(client)
+    run(hook.on_sample_start(sample_start("a")))
+    run(hook.on_sample_scoring(SampleScoring(None, "run-1", "eval-1", "a")))
+    grader = ModelEvent(
+        model="openrouter/example/model",
+        input=[], tools=[], tool_choice="auto", config=GenerateConfig(),
+        output=ModelOutput.from_content("openrouter/example/model", "GRADE: C"),
+        call=ModelCall(request={}, response={"usage": {"cost": 0.0042}}),
+    )
+    run(hook.on_sample_event(SampleEvent(None, "run-1", "eval-1", "a", grader)))
+    agent, scoring = client.roots[0].children
+    assert scoring.params == {"name": "scoring", "as_type": "evaluator"}
+    assert agent.children == []
+    generation = scoring.children[0]
+    assert generation.params["metadata"]["phase"] == "scoring"
+    assert generation.params["cost_details"] == {"total": 0.0042}
+    assert labels[-1] == [hook._sessions["run-1"]["session_id"]]
+    assert active == []
+
+
 async def sample_start_for(hook, sid):
     await hook.on_sample_start(sample_start(sid))
 
@@ -157,13 +200,8 @@ def test_enabled_tracing_requires_keys_and_endpoint():
     assert "pk-lf" not in message
 
 
-@pytest.mark.parametrize("label", [None, "smoke", "experiment-" + "x" * 250 + "é"])
-def test_readable_sessions_group_samples_and_keep_runs_distinct(monkeypatch, label):
+def test_readable_sessions_group_samples_and_keep_runs_distinct(monkeypatch):
     monkeypatch.setenv("LANGFUSE_TRACING_ENABLED", "true")
-    if label is None:
-        monkeypatch.delenv("EXPERIMENT_NAME", raising=False)
-    else:
-        monkeypatch.setenv("EXPERIMENT_NAME", label)
     attributes = []
 
     @contextmanager
@@ -182,10 +220,105 @@ def test_readable_sessions_group_samples_and_keep_runs_distinct(monkeypatch, lab
     assert first != third
     assert first.startswith("codeipi / qwen3-coder-30b-a3b-instruct / ")
     assert first.endswith(" / run-1") and third.endswith(" / run-2")
-    assert first.isascii() and len(first) < 200
-    if label is None:
-        assert " / baseline / " in first
-    elif label == "smoke":
-        assert " / smoke / " in first
+    assert " / unknown / " in first
     assert attributes[0]["metadata"]["inspect_run_id"] == "run-1"
+    assert attributes[0]["tags"] == ["codeipi", "agent:mini-swe-agent", "harness:inspect", "guardrail:unknown"]
     assert [root.params["name"] for root in client.roots] == ["a", "b", "c"]
+
+
+def test_issuetrojan_sessions_share_codeipi_format(monkeypatch):
+    monkeypatch.setenv("RUN_BY", "morgan")
+    attributes = trace_attributes(
+        "issuetrojan", "openrouter/openai/gpt-oss-20b", "smoke", "abc123", ["agent:mini-swe-agent", "github_issue"]
+    )
+    assert attributes == {
+        "session_id": "issuetrojan / gpt-oss-20b / smoke / abc123",
+        "user_id": "morgan",
+        "tags": ["issuetrojan", "agent:mini-swe-agent", "github_issue"],
+    }
+
+
+def test_long_experiment_names_keep_sessions_short_and_ascii():
+    session = trace_attributes("codeipi", "model", "experiment-" + "x" * 250 + "é", "run-1", [])["session_id"]
+    assert session.isascii() and len(session) < 200
+    assert session.endswith(" / run-1")
+
+
+def checks_config(*enabled):
+    names = ["regex", "llm"]
+    return {"security": {"checks": [
+        {"name": name, "enabled": name in enabled, "patterns": []} for name in names
+    ]}}
+
+
+@pytest.mark.parametrize("enabled, tag", [
+    ((), "guardrail:none"),
+    (("regex",), "guardrail:regex"),
+    (("regex", "llm"), "guardrail:regex+llm"),
+])
+def test_guardrail_tag_names_enabled_checks(enabled, tag):
+    assert guardrail_tag(checks_config(*enabled)) == tag
+
+
+def test_codeipi_sessions_use_solver_config(monkeypatch, tmp_path):
+    monkeypatch.setenv("LANGFUSE_TRACING_ENABLED", "true")
+    config = tmp_path / "regex.yaml"
+    config.write_text(
+        "experiment: regex-v1\n"
+        "model: null\n"
+        "limits: {steps: 1, seconds: 1, cost_usd: 0.01}\n"
+        "security:\n  checks:\n    - {name: regex, enabled: true, patterns: ['rm -rf']}\n"
+    )
+    attributes = []
+
+    @contextmanager
+    def capture_attributes(**kwargs):
+        attributes.append(kwargs)
+        yield
+
+    monkeypatch.setattr("langfuse.propagate_attributes", capture_attributes)
+    hook = LangfuseHooks(FakeClient())
+    spec = SimpleNamespace(solver_args={"config_path": str(config)})
+    run(hook.on_task_start(TaskStart(None, "run-1", "eval-1", spec, None)))
+    run(hook.on_sample_start(sample_start("a")))
+    assert " / regex-v1 / " in attributes[0]["session_id"]
+    assert attributes[0]["tags"] == ["codeipi", "agent:mini-swe-agent", "harness:inspect", "guardrail:regex"]
+
+
+def test_missing_run_by_leaves_user_unset(monkeypatch):
+    monkeypatch.delenv("RUN_BY", raising=False)
+    assert trace_attributes("codeipi", "model", "baseline", "run-1", [])["user_id"] is None
+
+
+def test_codeipi_solver_runs_agent_inside_trace_attributes(monkeypatch):
+    import agents.agent as module
+    from agents.tracing import current_trace_attributes
+    from inspect_ai.model import ModelName
+    from inspect_ai.solver import TaskState
+
+    active = []
+    seen = {}
+
+    @contextmanager
+    def capture_attributes(**kwargs):
+        active.append(kwargs)
+        yield
+        active.pop()
+
+    def fake_run(task, env, model_name, config, **kwargs):
+        seen["attributes"] = list(active)
+        agent = type("Agent", (), {"messages": []})()
+        return {"agent": agent, "result": {"submission": "done"}}
+
+    monkeypatch.setattr("langfuse.propagate_attributes", capture_attributes)
+    monkeypatch.setattr(module, "run_swe", fake_run)
+    monkeypatch.setattr(module, "sandbox", lambda: object())
+    state = TaskState(model=ModelName("test/model"), sample_id="one", epoch=0, input="task", messages=[], metadata={})
+
+    async def check():
+        current_trace_attributes.set({"session_id": "codeipi / model / smoke / run-1", "user_id": "morgan"})
+        await module.coding_agent(model_name="override/model")(state, None)
+
+    run(check())
+    assert seen["attributes"] == [{"session_id": "codeipi / model / smoke / run-1", "user_id": "morgan"}]
+    assert active == []

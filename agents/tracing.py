@@ -8,11 +8,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from inspect_ai.event import ModelEvent, ToolEvent
-from inspect_ai.hooks import Hooks, RunEnd, SampleEnd, SampleEvent, SampleScoring, SampleStart, hooks
+from inspect_ai.hooks import Hooks, RunEnd, SampleEnd, SampleEvent, SampleScoring, SampleStart, TaskStart, hooks
 from inspect_ai.model import get_model
 
 
 current_agent_trace = ContextVar("current_agent_trace", default=None)
+current_trace_attributes = ContextVar("current_trace_attributes", default=None)
 
 
 def tracing_enabled() -> bool:
@@ -30,6 +31,24 @@ def validate_langfuse_config(environ: dict[str, str] | None = None) -> None:
         missing.append("LANGFUSE_BASE_URL (or LANGFUSE_HOST)")
     if missing:
         raise ValueError("Langfuse tracing is enabled but required settings are missing: " + ", ".join(missing))
+
+
+def trace_attributes(benchmark: str, model: str, experiment: str, run_id: str, tags: list[str]) -> dict:
+    """Session and tags shared by every benchmark trace."""
+    model = model.rsplit("/", 1)[-1]
+    prefix = f"{benchmark} / {model} / {experiment}".encode("ascii", "replace").decode()
+    suffix = f" / {run_id}"
+    return {
+        "session_id": prefix[:199 - len(suffix)] + suffix,
+        "user_id": os.getenv("RUN_BY", "").strip() or None,
+        "tags": [benchmark, *tags],
+    }
+
+
+def guardrail_tag(config: dict) -> str:
+    """Name the enabled security checks, e.g. guardrail:regex or guardrail:none."""
+    enabled = [check["name"] for check in config["security"]["checks"] if check["enabled"]]
+    return "guardrail:" + ("+".join(enabled) or "none")
 
 
 def _jsonable(value: Any) -> Any:
@@ -75,11 +94,23 @@ def _token_usage(event: ModelEvent) -> dict[str, int]:
     return result
 
 
+def _cost(event: ModelEvent) -> float | None:
+    """Use Inspect's cost if set, else the cost the provider reported in its response."""
+    cost = getattr(getattr(event.output, "usage", None), "total_cost", None)
+    if cost is None and event.call is not None:
+        cost = ((event.call.response or {}).get("usage") or {}).get("cost")
+    if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost >= 0:
+        return float(cost)
+    return None
+
+
 @dataclass
 class _SampleTrace:
     root: Any
     sample_id: str
+    attributes: dict = field(default_factory=dict)
     agent: Any = None
+    scoring: Any = None
     scoring_started: bool = False
     seen_event_ids: set[str] = field(default_factory=set)
 
@@ -91,7 +122,8 @@ class LangfuseHooks(Hooks):
     def __init__(self, client: Any | None = None) -> None:
         self._client = client
         self._samples: dict[str, _SampleTrace] = {}
-        self._sessions: dict[str, str] = {}
+        self._sessions: dict[str, dict] = {}
+        self._configs: dict[str, dict] = {}
 
     def enabled(self) -> bool:
         return tracing_enabled()
@@ -103,6 +135,13 @@ class LangfuseHooks(Hooks):
             self._client = get_client()
         return self._client
 
+    async def on_task_start(self, data: TaskStart) -> None:
+        config_path = (data.spec.solver_args or {}).get("config_path")
+        if config_path:
+            from agents.swe import load_config
+
+            self._configs[data.run_id] = load_config(config_path)
+
     async def on_sample_start(self, data: SampleStart) -> None:
         if not self.enabled():
             return
@@ -113,17 +152,16 @@ class LangfuseHooks(Hooks):
         sample_label = str(summary.id)
         trace_name = sample_label
         if data.run_id not in self._sessions:
-            model = get_model().name.rsplit("/", 1)[-1]
-            experiment = os.getenv("EXPERIMENT_NAME", "").strip() or "baseline"
-            prefix = f"codeipi / {model} / {experiment}".encode("ascii", "replace").decode()
-            suffix = f" / {data.run_id}"
-            self._sessions[data.run_id] = prefix[:199 - len(suffix)] + suffix
-        with propagate_attributes(
-            session_id=self._sessions[data.run_id],
-            trace_name=trace_name,
-            metadata={"inspect_eval_id": data.eval_id, "inspect_run_id": data.run_id},
-            tags=["inspect", "codeipi"],
-        ):
+            config = self._configs.get(data.run_id)
+            experiment = config["experiment"] if config else "unknown"
+            tags = ["agent:mini-swe-agent", "harness:inspect", guardrail_tag(config) if config else "guardrail:unknown"]
+            self._sessions[data.run_id] = trace_attributes("codeipi", get_model().name, experiment, data.run_id, tags)
+        attributes = {
+            **self._sessions[data.run_id],
+            "trace_name": trace_name,
+            "metadata": {"inspect_eval_id": data.eval_id, "inspect_run_id": data.run_id},
+        }
+        with propagate_attributes(**attributes):
             root = client.start_observation(
                 name=trace_name,
                 as_type="span",
@@ -140,18 +178,22 @@ class LangfuseHooks(Hooks):
                     "scoring_phase": "pending",
                 },
             )
-        state = _SampleTrace(root=root, sample_id=sample_label)
-        state.agent = root.start_observation(
-            name="stock mini-swe-agent", as_type="agent", input={"task": _jsonable(summary.input)}
-        )
+            state = _SampleTrace(root=root, sample_id=sample_label, attributes=attributes)
+            state.agent = root.start_observation(
+                name="stock mini-swe-agent", as_type="agent", input={"task": _jsonable(summary.input)}
+            )
         current_agent_trace.set(state.agent)
+        current_trace_attributes.set(attributes)
         self._samples[data.sample_id] = state
 
     async def on_sample_event(self, data: SampleEvent) -> None:
         state = self._samples.get(data.sample_id)
         if state is None:
             return
+        from langfuse import propagate_attributes
+
         event = data.event
+        parent = state.scoring or state.agent
         event_id = getattr(event, "uuid", None)
         if event_id is not None:
             if event_id in state.seen_event_ids:
@@ -174,17 +216,20 @@ class LangfuseHooks(Hooks):
                 "error": event.error,
                 "traceback": event.traceback if event.error else None,
             }
-            obs = state.agent.start_observation(
-                name="model call",
-                as_type="generation",
-                model=event.model,
-                input=_jsonable(event.input),
-                output=output,
-                usage_details=usage,
-                metadata=metadata,
-                level="ERROR" if event.error else None,
-                status_message=event.error,
-            )
+            cost = _cost(event)
+            with propagate_attributes(**state.attributes):
+                obs = parent.start_observation(
+                    name="model call",
+                    as_type="generation",
+                    model=event.model,
+                    input=_jsonable(event.input),
+                    output=output,
+                    usage_details=usage,
+                    cost_details={"total": cost} if cost is not None else None,
+                    metadata=metadata,
+                    level="ERROR" if event.error else None,
+                    status_message=event.error,
+                )
             obs.end()
         elif isinstance(event, ToolEvent):
             failed = bool(event.failed or event.error)
@@ -201,26 +246,32 @@ class LangfuseHooks(Hooks):
                 "failed": failed,
                 "error": _jsonable(event.error),
             }
-            obs = state.agent.start_observation(
-                name=f"tool: {event.function}",
-                as_type="tool",
-                input={"arguments": _jsonable(event.arguments), "code": _jsonable(event.view)},
-                output=_jsonable(event.result),
-                metadata=metadata,
-                level="ERROR" if failed else None,
-                status_message=str(event.error) if event.error else None,
-            )
+            with propagate_attributes(**state.attributes):
+                obs = parent.start_observation(
+                    name=f"tool: {event.function}",
+                    as_type="tool",
+                    input={"arguments": _jsonable(event.arguments), "code": _jsonable(event.view)},
+                    output=_jsonable(event.result),
+                    metadata=metadata,
+                    level="ERROR" if failed else None,
+                    status_message=str(event.error) if event.error else None,
+                )
             obs.end()
 
     async def on_sample_scoring(self, data: SampleScoring) -> None:
         state = self._samples.get(data.sample_id)
         if state is None:
             return
+        from langfuse import propagate_attributes
+
         state.scoring_started = True
+        with propagate_attributes(**state.attributes):
+            state.scoring = state.root.start_observation(name="scoring", as_type="evaluator")
         state.root.update(metadata={"scoring_phase": "started"})
 
     async def on_sample_end(self, data: SampleEnd) -> None:
         current_agent_trace.set(None)
+        current_trace_attributes.set(None)
         state = self._samples.pop(data.sample_id, None)
         if state is None:
             return
@@ -255,11 +306,14 @@ class LangfuseHooks(Hooks):
                         "score_metadata": _jsonable(getattr(score, "metadata", None)),
                     },
                 )
+        if state.scoring:
+            state.scoring.update(output={"scores": scores}).end()
         state.agent.update(output={"answer": _jsonable(sample.output)}, metadata={"phase": "agent"}).end()
         state.root.end()
 
     async def on_run_end(self, data: RunEnd) -> None:
         self._sessions.pop(data.run_id, None)
+        self._configs.pop(data.run_id, None)
         if not self.enabled():
             return
         client = self._client
