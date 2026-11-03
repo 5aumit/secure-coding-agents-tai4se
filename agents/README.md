@@ -15,8 +15,10 @@ See the [project README](../README.md) for setup and run commands.
 ## Command checks
 
 `GuardedEnvironment.execute()` calls enabled guardrails in configuration order.
-The first block stops the command. If no guardrail blocks it, the container
-executes it. Disabled guardrails do not run.
+It records each guardrail's decision, even when an earlier guardrail blocks.
+If any guardrail blocks, the command does not execute. Otherwise, the container
+executes it. Disabled guardrails do not run. A guardrail error stops the checks
+and raises `CheckFailure`, even if an earlier guardrail blocked.
 
 Every block returns `Command blocked by security policy.` to the agent.
 Matched patterns and other details stay in local records and optional Langfuse

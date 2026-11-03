@@ -48,6 +48,7 @@ class GuardedEnvironment:
 
     def execute(self, action: dict, **kwargs):
         command = action.get("command", "")
+        blocked = False
         try:
             for check in self.checks:
                 if not check["enabled"]:
@@ -68,11 +69,14 @@ class GuardedEnvironment:
                 if decision.blocked:
                     result = _BLOCKED_RESULT.copy()
                     self.record({**row, "result": result})
-                    return result
-                self.record(row)
+                    blocked = True
+                else:
+                    self.record(row)
         except Exception as exc:
             self.error = CheckFailure(f"Security check failed: {type(exc).__name__}")
             self.record({"action": action, "decision": "error", "error_type": type(exc).__name__})
             raise self.error from None
+        if blocked:
+            return _BLOCKED_RESULT.copy()
         self.record({"action": action, "decision": "execute"})
         return self.env.execute(action, **kwargs)

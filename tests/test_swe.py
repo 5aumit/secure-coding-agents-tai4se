@@ -57,21 +57,40 @@ def test_guardrail_requires_check():
         MissingCheck()
 
 
-@pytest.mark.parametrize("enabled,patterns,expected", [
-    (True, ["forbidden"], [("second", "block")]),
-    (True, ["absent"], [("second", "allow"), ("first", "block")]),
-    (False, ["forbidden"], [("first", "block")]),
+@pytest.mark.parametrize("enabled,patterns,first_patterns,expected,executed", [
+    (True, ["forbidden"], ["forbidden"], [("second", "block"), ("first", "block")], False),
+    (True, ["absent"], ["forbidden"], [("second", "allow"), ("first", "block")], False),
+    (True, ["forbidden"], ["absent"], [("second", "block"), ("first", "allow")], False),
+    (True, ["absent"], ["absent"], [("second", "allow"), ("first", "allow")], True),
+    (False, ["forbidden"], ["forbidden"], [("first", "block")], False),
 ])
-def test_explicit_registration_and_config_order(monkeypatch, enabled, patterns, expected):
+def test_explicit_registration_and_config_order(monkeypatch, enabled, patterns, first_patterns, expected, executed):
     monkeypatch.setitem(SUPPORTED_GUARDRAILS, "first", RegexGuardrail())
     monkeypatch.setitem(SUPPORTED_GUARDRAILS, "second", RegexGuardrail())
     checks = [
         {"name": "second", "enabled": enabled, "patterns": patterns},
-        {"name": "first", "enabled": True, "patterns": ["forbidden"]},
+        {"name": "first", "enabled": True, "patterns": first_patterns},
     ]
     raw, decisions = FakeEnvironment(), []
     GuardedEnvironment(raw, checks, decisions.append).execute({"command": "forbidden"})
-    assert [(row["check"], row["decision"]) for row in decisions] == expected
+    assert [(row["check"], row["decision"]) for row in decisions if row["decision"] != "execute"] == expected
+    assert raw.commands == (["forbidden"] if executed else [])
+
+
+def test_error_after_block_still_stops_sample(monkeypatch):
+    class Broken(Guardrail):
+        def check(self, command, settings):
+            raise RuntimeError("broken")
+
+    monkeypatch.setitem(SUPPORTED_GUARDRAILS, "broken", Broken())
+    checks = [
+        {"name": "regex", "enabled": True, "patterns": ["forbidden"]},
+        {"name": "broken", "enabled": True, "patterns": []},
+    ]
+    raw, decisions = FakeEnvironment(), []
+    with pytest.raises(CheckFailure):
+        GuardedEnvironment(raw, checks, decisions.append).execute({"command": "forbidden"})
+    assert [row["decision"] for row in decisions] == ["block", "error"]
     assert raw.commands == []
 
 
