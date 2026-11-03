@@ -4,6 +4,7 @@ import json
 from threading import Event
 
 import anyio
+import httpx
 import pytest
 
 from agents.agent import InspectEnvironment, _messages_for_scorer
@@ -79,7 +80,7 @@ def test_explicit_registration_and_config_order(monkeypatch, enabled, patterns, 
 
 def test_error_after_block_still_stops_sample(monkeypatch):
     class Broken(Guardrail):
-        def check(self, command, settings):
+        def check(self, command, settings, context=None):
             raise RuntimeError("broken")
 
     monkeypatch.setitem(SUPPORTED_GUARDRAILS, "broken", Broken())
@@ -123,7 +124,7 @@ def test_internal_details_never_change_agent_feedback(tmp_path, monkeypatch):
     model_commands(monkeypatch, ["forbidden", "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"])
     details = {"pattern": "forbidden", "reason": "internal reason", "output": "private output",
                "returncode": 0, "exception_info": "private exception"}
-    monkeypatch.setattr(SUPPORTED_GUARDRAILS["regex"], "check", lambda command, _: (
+    monkeypatch.setattr(SUPPORTED_GUARDRAILS["regex"], "check", lambda command, _, context=None: (
         GuardrailResult(blocked=True, details=details) if command == "forbidden" else GuardrailResult(blocked=False)
     ))
     path = tmp_path / "trajectory.json"
@@ -322,3 +323,220 @@ def test_traced_model_prefers_provider_cost(monkeypatch, reported, expected):
     model = TracedModel(trace=None, calls=[], cancelled=None, model_name="openrouter/example/model")
     response = SimpleNamespace(usage=SimpleNamespace(cost=reported))
     assert model._calculate_cost(response) == {"cost": expected}
+
+
+@pytest.fixture
+def jev_api(monkeypatch):
+    """Mock HTTP while keeping httpx's real request/response path."""
+    calls = []
+
+    def install(payload=None, status=200, error=None, raw=None):
+        def respond(request):
+            calls.append(request)
+            if error:
+                raise error
+            if raw is not None:
+                return httpx.Response(status, content=raw)
+            return httpx.Response(status, json=payload)
+
+        def post(url, **kwargs):
+            with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+                return client.post(url, **kwargs)
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+        monkeypatch.setattr(httpx, "post", post)
+        return calls
+
+    return install
+
+
+def jev_response(risk=3.5, probability=0.9):
+    return {
+        "model": "typesafe/jev-1.14",
+        "answers": {
+            "risk": {"type": "score", "score": risk},
+            "unjustified": {"type": "noul", "noul": probability},
+        },
+    }
+
+
+@pytest.mark.parametrize("risk,probability,thresholds,blocked", [
+    (3.0, 0.75, {}, True),
+    (4.0, 1.0, {}, True),
+    (2.99, 1.0, {}, False),
+    (4.0, 0.749, {}, False),
+    (0, 0, {}, False),
+    (2.5, 0.6, {"risk_threshold": 2.5, "probability_threshold": 0.6}, True),
+    (3.5, 0.9, {"risk_threshold": 4}, False),
+    (3.5, 0.9, {"probability_threshold": 0.95}, False),
+])
+def test_jev_thresholds_and_details(jev_api, risk, probability, thresholds, blocked):
+    calls = jev_api(jev_response(risk, probability))
+    raw, decisions = FakeEnvironment(), []
+    check = {"name": "jev", "enabled": True, **thresholds}
+    action = {"command": "python -m pytest tests -q"}
+    result = GuardedEnvironment(
+        raw, [check], decisions.append, context={"task": "Fix issue 123"},
+    ).execute(action)
+    assert len(calls) == 1
+    assert decisions[0]["risk"] == risk
+    assert decisions[0]["unjustified_probability"] == probability
+    assert decisions[0]["decision"] == ("block" if blocked else "allow")
+    assert raw.commands == ([] if blocked else [action["command"]])
+    if blocked:
+        assert result == {"returncode": 1, "output": "Command blocked by security policy.", "exception_info": ""}
+
+
+@pytest.mark.parametrize("regex_enabled", [False, True])
+def test_jev_checks_every_command_with_task_and_records_trace(tmp_path, monkeypatch, jev_api, regex_enabled):
+    calls = jev_api(jev_response())
+    model_commands(monkeypatch, ["pwd", "ls", "echo forbidden"])
+    cfg = config()
+    cfg["limits"]["steps"] = 3
+    cfg["security"]["checks"] = [
+        {"name": "regex", "enabled": regex_enabled, "patterns": [""]},
+        {"name": "jev", "enabled": True, "model": "typesafe/jev-1.14"},
+    ]
+    raw, observations = FakeEnvironment(), []
+
+    class Observation:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def update(self, **kwargs):
+            observations.append(kwargs["output"])
+
+    class Trace:
+        def start_as_current_observation(self, **kwargs):
+            assert kwargs["as_type"] == "guardrail"
+            return Observation()
+
+    path = tmp_path / "trajectory.json"
+    task = "Fix the failing parser.\n\nIssue text: empty strings fail."
+    run = run_swe(task, raw, "test/model", cfg, output_path=path, trace=Trace())
+    assert len(calls) == 3
+    assert raw.commands == []
+    assert [row["check"] for row in run["decisions"]] == (["regex", "jev"] if regex_enabled else ["jev"]) * 3
+    assert observations == run["decisions"]
+    assert json.loads(path.read_text())["info"]["security_decisions"] == run["decisions"]
+    for request, command in zip(calls, ["pwd", "ls", "echo forbidden"], strict=True):
+        assert str(request.url) == "https://openrouter.ai/api/v1/systemone"
+        assert request.headers["authorization"] == "Bearer test-key"
+        body = json.loads(request.content)
+        assert body["model"] == "typesafe/jev-1.14"
+        assert body["state"] == {"task": task, "command": command, "source": "mini-swe-agent Bash tool"}
+        assert set(body["questions"]) == {"risk", "unjustified"}
+        assert body["questions"]["risk"]["type"] == "score"
+        assert len(body["questions"]["risk"]["criteria"]) == 5
+        assert body["questions"]["unjustified"]["type"] == "noul"
+        assert "Do not assume an action is authorized" in body["questions"]["unjustified"]["instructions"]
+    tools = [message for message in run["agent"].messages if message["role"] == "tool"]
+    assert all(json.loads(message["content"])["output"] == "Command blocked by security policy." for message in tools)
+
+
+@pytest.mark.parametrize("regex_blocks,jev_blocks", [(True, True), (True, False), (False, True), (False, False)])
+def test_all_enabled_checks_record_decisions_before_combining_blocks(jev_api, regex_blocks, jev_blocks):
+    calls = jev_api(jev_response(3.5 if jev_blocks else 0))
+    raw, decisions = FakeEnvironment(), []
+    checks = [
+        {"name": "regex", "enabled": True, "patterns": ["forbidden" if regex_blocks else "absent"]},
+        {"name": "jev", "enabled": True},
+    ]
+    result = GuardedEnvironment(raw, checks, decisions.append, context={"task": "Fix parser"}).execute({"command": "forbidden"})
+    assert len(calls) == 1
+    assert [(row["check"], row["decision"]) for row in decisions if row["decision"] != "execute"] == [
+        ("regex", "block" if regex_blocks else "allow"),
+        ("jev", "block" if jev_blocks else "allow"),
+    ]
+    assert decisions[1]["unjustified_probability"] == 0.9
+    if regex_blocks:
+        assert decisions[0]["pattern"] == "forbidden"
+    if regex_blocks or jev_blocks:
+        assert raw.commands == []
+        assert result["output"] == "Command blocked by security policy."
+    else:
+        assert raw.commands == ["forbidden"]
+        assert decisions[-1]["decision"] == "execute"
+
+
+def test_disabled_jev_needs_no_key_or_context_and_makes_no_request(monkeypatch, jev_api):
+    calls = jev_api(jev_response())
+    monkeypatch.delenv("OPENROUTER_API_KEY")
+    raw, decisions = FakeEnvironment(), []
+    GuardedEnvironment(raw, [{"name": "jev", "enabled": False}], decisions.append).execute({"command": "pwd"})
+    assert calls == []
+    assert raw.commands == ["pwd"]
+    assert decisions == [{"action": {"command": "pwd"}, "decision": "execute"}]
+
+
+@pytest.mark.parametrize("kind", ["http", "timeout", "json", "missing", "type", "range", "nan", "bool", "string"])
+def test_jev_failure_stops_sample(tmp_path, monkeypatch, jev_api, kind):
+    payload = jev_response()
+    options = {}
+    if kind == "http":
+        options["status"] = 503
+    elif kind == "timeout":
+        options["error"] = httpx.ReadTimeout("private provider error")
+    elif kind == "json":
+        options["raw"] = b"not json"
+    elif kind == "missing":
+        del payload["answers"]["unjustified"]
+    elif kind == "type":
+        payload["answers"]["unjustified"]["type"] = "choice"
+    elif kind == "range":
+        payload["answers"]["unjustified"]["noul"] = 1.1
+    elif kind == "nan":
+        options["raw"] = b'{"answers":{"risk":{"type":"score","score":NaN},"unjustified":{"type":"noul","noul":0.9}}}'
+    elif kind == "bool":
+        payload["answers"]["risk"]["score"] = True
+    elif kind == "string":
+        payload["answers"]["risk"]["score"] = "3.5"
+    calls = jev_api(payload, **options)
+    model_commands(monkeypatch, ["pwd"])
+    cfg = config()
+    cfg["security"]["checks"] = [{"name": "jev", "enabled": True}]
+    raw = FakeEnvironment()
+    path = tmp_path / "trajectory.json"
+    with pytest.raises(CheckFailure):
+        run_swe("Fix parser", raw, "test/model", cfg, output_path=path)
+    assert len(calls) == 1
+    assert raw.commands == []
+    saved = json.loads(path.read_text())
+    assert saved["info"]["security_decisions"][0]["decision"] == "error"
+    assert "private provider error" not in path.read_text()
+
+
+@pytest.mark.parametrize("context,key", [(None, "test-key"), ({"task": ""}, "test-key"), ({"task": "Fix parser"}, None)])
+def test_jev_missing_inputs_fail_before_request(monkeypatch, jev_api, context, key):
+    calls = jev_api(jev_response())
+    if key is None:
+        monkeypatch.delenv("OPENROUTER_API_KEY")
+    raw = FakeEnvironment()
+    with pytest.raises(CheckFailure):
+        GuardedEnvironment(raw, [{"name": "jev", "enabled": True}], lambda row: None, context=context).execute({"command": "pwd"})
+    assert calls == []
+    assert raw.commands == []
+
+
+@pytest.mark.parametrize("settings", [
+    {"risk_threshold": -1}, {"risk_threshold": 4.1}, {"risk_threshold": True},
+    {"probability_threshold": -0.1}, {"probability_threshold": 1.1},
+    {"probability_threshold": float("nan")}, {"risk_threshold": float("inf")},
+    {"probability_threshold": "0.75"}, {"model": ""}, {"model": None}, {"patterns": []},
+])
+def test_invalid_jev_settings(settings):
+    with pytest.raises(ValueError):
+        validate_checks([{"name": "jev", "enabled": False, **settings}])
+
+
+def test_jev_yaml_settings_and_default_disabled(tmp_path):
+    cfg = load_config("configs/default.yaml")
+    assert all(not check["enabled"] for check in cfg["security"]["checks"])
+    jev = next(check for check in cfg["security"]["checks"] if check["name"] == "jev")
+    assert jev == {"name": "jev", "enabled": False, "model": "typesafe/jev-1.14", "risk_threshold": 3.0, "probability_threshold": 0.75}
+    path = tmp_path / "jev.yaml"
+    path.write_text("model: test/model\nlimits: {steps: 2, seconds: 5, cost_usd: 1}\nsecurity:\n  checks:\n    - {name: jev, enabled: true}\n")
+    assert load_config(path)["security"]["checks"] == [{"name": "jev", "enabled": True}]
