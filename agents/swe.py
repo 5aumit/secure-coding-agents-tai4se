@@ -110,7 +110,10 @@ def run_swe(
         if record:
             record(row)
 
-    guarded = GuardedEnvironment(env, config["security"]["checks"], save_decision)
+    guarded = GuardedEnvironment(
+        env, config["security"]["checks"], save_decision,
+        context={"task": task, "source": "mini-swe-agent Bash tool"},
+    )
     model = TracedModel(
         model_name=model_name, trace=trace, calls=calls, cancelled=cancelled, **stock["model"]
     )
