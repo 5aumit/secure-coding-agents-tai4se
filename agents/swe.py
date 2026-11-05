@@ -10,6 +10,8 @@ from minisweagent.models.litellm_model import LitellmModel
 
 from agents.security import GuardedEnvironment, validate_checks
 
+MODEL_TIMEOUT_SECONDS = 300
+
 
 def load_config(path: str | Path):
     data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
@@ -114,8 +116,11 @@ def run_swe(
         env, config["security"]["checks"], save_decision,
         context={"task": task, "source": "mini-swe-agent Bash tool"},
     )
+    # LiteLLM waits up to 6000 s by default. Cancel a stuck reply sooner; mini-swe-agent retries it.
+    model_kwargs = {**stock["model"].get("model_kwargs", {}), "timeout": MODEL_TIMEOUT_SECONDS}
     model = TracedModel(
-        model_name=model_name, trace=trace, calls=calls, cancelled=cancelled, **stock["model"]
+        model_name=model_name, trace=trace, calls=calls, cancelled=cancelled,
+        **{**stock["model"], "model_kwargs": model_kwargs},
     )
     agent = DefaultAgent(model, guarded, **agent_config)
     try:

@@ -194,6 +194,12 @@ def test_stock_loop_and_security(tmp_path, monkeypatch, enabled, executed):
     assert json.loads((tmp_path / "trajectory.json").read_text())["info"]["security_decisions"] == run["decisions"]
 
 
+def test_model_requests_have_a_timeout(tmp_path, monkeypatch):
+    model_commands(monkeypatch, ["echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"])
+    run = run_swe("issue", FakeEnvironment(), "test/model", config(), output_path=tmp_path / "trajectory.json")
+    assert run["agent"].model.config.model_kwargs == {"drop_params": True, "timeout": 300}
+
+
 def test_check_failure_stops_sample_and_never_executes(tmp_path, monkeypatch):
     from agents import guardrails
 
