@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import platform
+from contextlib import nullcontext
 from threading import Event
 
 import anyio
@@ -12,7 +13,7 @@ from inspect_ai.tool import ToolCall
 from inspect_ai.util import sandbox
 
 from agents.swe import load_config, observation, run_swe
-from agents.tracing import current_agent_trace
+from agents.tracing import current_agent_trace, current_trace_attributes
 
 
 class InspectEnvironment:
@@ -84,14 +85,22 @@ def coding_agent(config_path: str = "configs/default.yaml", model_name: str | No
         cancelled = Event()
         trace = current_agent_trace.get()
         env = InspectEnvironment(sandbox(), cancelled, trace)
+        attributes = current_trace_attributes.get()
+        if attributes:
+            from langfuse import propagate_attributes
+
+            labels = propagate_attributes(**attributes)
+        else:
+            labels = nullcontext()
         try:
-            run = await anyio.to_thread.run_sync(
-                lambda: run_swe(
-                    state.input_text, env, effective["model"], effective,
-                    record=decisions.append, cancelled=cancelled, trace=trace,
-                ),
-                abandon_on_cancel=True,
-            )
+            with labels:
+                run = await anyio.to_thread.run_sync(
+                    lambda: run_swe(
+                        state.input_text, env, effective["model"], effective,
+                        record=decisions.append, cancelled=cancelled, trace=trace,
+                    ),
+                    abandon_on_cancel=True,
+                )
         finally:
             cancelled.set()
         state.messages.extend(_messages_for_scorer(run["agent"].messages))

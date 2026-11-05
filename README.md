@@ -20,15 +20,20 @@ export OPENROUTER_API_KEY='your-api-key'
 ```
 
 Set provider credentials in your shell environment before each run.
+Or copy `.env.example` to `.env`, fill it in, and load it with
+`set -a; source .env; set +a`.
 
 ## Configure the agent
 
-Both runners read `configs/default.yaml`. It sets the model, step limit, time
-limit, cost limit, and security checks. The default model is
+Both runners read `configs/default.yaml`. It sets the experiment name, model,
+step limit, time limit, cost limit, and security checks. The default model is
 `openrouter/openai/gpt-oss-20b`. Guardrails are disabled by default.
 
 Copy the config to create an experiment configuration. Pass it to either runner
 with `--config path/to/config.yaml`. Enable or disable checks in that file.
+Set `experiment` to a short, lowercase, hyphenated name for the setting being
+tested, such as `regex-v1`. Reuse it across benchmarks and models that should be
+compared.
 See [the agent guide](agents/README.md) to configure, add, or edit guardrails.
 
 To change models, pass a `provider/model` identifier as CodeIPI's first argument
@@ -107,12 +112,27 @@ export LANGFUSE_TRACING_ENABLED=true
 export LANGFUSE_PUBLIC_KEY='your-public-key'
 export LANGFUSE_SECRET_KEY='your-secret-key'
 export LANGFUSE_BASE_URL='https://cloud.langfuse.com'
+export RUN_BY='your-name'
 ```
 
-Each run has a session with one trace per sample. Traces record task text, model
-calls, tool results, guardrail decisions, and scores. For CodeIPI, set
-`EXPERIMENT_NAME` to label the session. Local results remain available without
-Langfuse.
+Each run creates a Langfuse session with one trace per sample. Traces record task
+text, model calls, commands, guardrail decisions, and scores. Local results remain
+available without Langfuse.
+
+Sessions are named `benchmark / model / experiment / run-id`, for example
+`codeipi / gpt-oss-20b / regex-v1 / a1b2c3`. The experiment name comes from
+`experiment` in the config file. `RUN_BY` sets the Langfuse user, so each
+teammate's runs appear under their name.
+
+Traces also have these tags:
+
+| Tag | Applies to | Meaning |
+|---|---|---|
+| `codeipi`, `issuetrojan` | Each benchmark | Benchmark name |
+| `agent:mini-swe-agent` | Both | Agent used |
+| `guardrail:<names>` | Both | Enabled security checks, such as `guardrail:none` or `guardrail:regex` |
+| `harness:inspect` | CodeIPI | Run through Inspect AI |
+| `github_issue` | IssueTrojanBench | Attack delivered through a GitHub issue |
 
 ## Tests
 

@@ -13,8 +13,10 @@ from agents.security import GuardedEnvironment, validate_checks
 
 def load_config(path: str | Path):
     data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
-    if not isinstance(data, dict) or set(data) != {"model", "limits", "security"}:
-        raise ValueError("Config needs only model, limits, and security")
+    if not isinstance(data, dict) or set(data) != {"experiment", "model", "limits", "security"}:
+        raise ValueError("Config needs only experiment, model, limits, and security")
+    if not isinstance(data["experiment"], str) or not data["experiment"].strip():
+        raise ValueError("experiment must be a non-empty string")
     if data["model"] is not None and not isinstance(data["model"], str):
         raise ValueError("model must be a string or null")
     limits = data["limits"]
