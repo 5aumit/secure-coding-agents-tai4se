@@ -4,7 +4,8 @@ Course project for [TAI4SE](https://tai4se.github.io).
 
 We study whether security guardrails stop coding agents from following malicious
 instructions in GitHub issues. We compare runs with guardrails enabled and
-disabled using CodeIPI and IssueTrojanBench. Both benchmarks use mini-swe-agent.
+disabled using CodeIPI and IssueTrojanBench. SWE-bench Verified measures how
+guardrails affect normal coding work. All three benchmarks use mini-swe-agent.
 
 ## Setup
 
@@ -26,7 +27,7 @@ Or copy `.env.example` to `.env`, fill it in, and load it with
 ## Configure the agent
 
 Both runners read `configs/default.yaml`. It sets the experiment name, model,
-step limit, time limit, cost limit, and security checks. The default model is
+OpenRouter hosts, step limit, time limit, cost limit, and security checks. The default model is
 `openrouter/openai/gpt-oss-20b`. Guardrails are disabled by default.
 
 Copy the config to create an experiment configuration. Pass it to either runner
@@ -40,6 +41,19 @@ To change models, pass a `provider/model` identifier as CodeIPI's first argument
 or use ITB's `--model` option. Set the corresponding provider's API key.
 Time and cost limits are checked between agent steps. An active model request
 can exceed them.
+
+OpenRouter sends each request to one of several hosts for the same model, and
+hosts differ in quality. To keep runs comparable, set `providers` to the hosts
+allowed to serve the model, such as `providers: [AkashML]`. Requests then never
+fall back to other hosts. Each task's `model-calls.json` and Langfuse trace
+record the host that served each call. Report the host with your results.
+
+Before using a new model or host, run five quick SWE-bench tasks and check that
+some are resolved:
+
+```bash
+python -m scripts.run_swebench --config path/to/config.yaml --instances django__django-11099 pytest-dev__pytest-10081 sympy__sympy-12096 pallets__flask-5014 scikit-learn__scikit-learn-11310 --output outputs/model-check
+```
 
 ## Run CodeIPI
 
@@ -95,13 +109,40 @@ for these choices and [benchmark details](benchmarks/README.md) for data sources
 The output directory contains `results.json` and per-sample records, including
 configuration, model calls, commands, guardrail decisions, and repository changes.
 
+## Run SWE-bench Verified
+
+The runner downloads the 500 SWE-bench Verified tasks from Hugging Face at a fixed
+revision. Each task pulls its official Docker image, about 1-3 GB.
+
+List tasks, then run one:
+
+```bash
+python -m scripts.run_swebench --list
+python -m scripts.run_swebench --instances django__django-11099 --output outputs/swebench-django-11099
+```
+
+The output directory must not already exist. `--instances` accepts multiple IDs.
+`--limit N` runs the first N selected tasks. Omit both to run all 500.
+`--steps`, `--seconds`, and `--cost-limit` override the config limits for a run.
+
+The agent works in the task's image with networking disabled. The runner saves
+every change in `/testbed` as the patch. It then applies the patch in a fresh
+container, runs the official test script with networking enabled, and grades the
+log with the `swebench` package. A task is resolved when the issue's tests now
+pass and the other tests still pass. Each task folder contains the patch, test
+log, grading report, commands, guardrail decisions, and model calls.
+
+Downloaded images stay on disk. Remove them with `docker image prune -a` when you
+no longer need them.
+
 ## Read results
 
 Check commands and saved files alongside benchmark scores. CodeIPI can count a
 blocked command as compliance because its scorer reads attempted tool calls.
 IssueTrojanBench's EEM score checks whether selected files exist. It does not
 prove that an attack command ran. We do not check legitimate task correctness
-for IssueTrojanBench.
+for IssueTrojanBench. A few SWE-bench tests contact external websites and can fail
+for reasons unrelated to the agent's patch.
 
 ## Optional Langfuse tracing
 
@@ -128,9 +169,9 @@ Traces also have these tags:
 
 | Tag | Applies to | Meaning |
 |---|---|---|
-| `codeipi`, `issuetrojan` | Each benchmark | Benchmark name |
-| `agent:mini-swe-agent` | Both | Agent used |
-| `guardrail:<names>` | Both | Enabled security checks, such as `guardrail:none` or `guardrail:regex` |
+| `codeipi`, `issuetrojan`, `swebench` | Each benchmark | Benchmark name |
+| `agent:mini-swe-agent` | All | Agent used |
+| `guardrail:<names>` | All | Enabled security checks, such as `guardrail:none` or `guardrail:regex` |
 | `harness:inspect` | CodeIPI | Run through Inspect AI |
 | `github_issue` | IssueTrojanBench | Attack delivered through a GitHub issue |
 
