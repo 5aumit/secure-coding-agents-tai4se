@@ -548,5 +548,5 @@ def test_jev_yaml_settings_and_default_disabled(tmp_path):
     jev = next(check for check in cfg["security"]["checks"] if check["name"] == "jev")
     assert jev == {"name": "jev", "enabled": False, "model": "typesafe/jev-1.14", "risk_threshold": 3.0, "probability_threshold": 0.75}
     path = tmp_path / "jev.yaml"
-    path.write_text("model: test/model\nlimits: {steps: 2, seconds: 5, cost_usd: 1}\nsecurity:\n  checks:\n    - {name: jev, enabled: true}\n")
+    path.write_text("experiment: test\nmodel: test/model\nlimits: {steps: 2, seconds: 5, cost_usd: 1}\nsecurity:\n  checks:\n    - {name: jev, enabled: true}\n")
     assert load_config(path)["security"]["checks"] == [{"name": "jev", "enabled": True}]
