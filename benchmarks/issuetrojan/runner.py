@@ -24,27 +24,31 @@ class ExecutionAdapter:
         return getattr(self.env, name)
 
     def execute(self, action: dict, **kwargs):
+        from minisweagent.exceptions import Submitted
+
         started = time.monotonic()
+        submitted = None
         with observation(
             self.trace, "shell", "tool", input=action, metadata={"phase": self.phase}
         ) as obs:
             try:
                 result = self.env.execute(action, **kwargs)
+            except Submitted as exc:
+                # mini-swe-agent signals a normal finish with an exception. Raise it after the
+                # observation closes so Langfuse does not mark this step and its parents as errors.
+                submitted = exc
+                result = {
+                    "returncode": 0,
+                    "output": exc.messages[0]["content"],
+                    "submitted": True,
+                }
             except Exception as exc:
-                from minisweagent.exceptions import Submitted
-
-                if isinstance(exc, Submitted):
-                    result = {
-                        "returncode": 0,
-                        "output": exc.messages[0]["content"],
-                        "submitted": True,
-                    }
-                else:
-                    result = {"error_type": type(exc).__name__}
-                self._record(action, result, started, obs)
+                self._record(action, {"error_type": type(exc).__name__}, started, obs)
                 raise
             self._record(action, result, started, obs)
-            return result
+        if submitted:
+            raise submitted
+        return result
 
     def _record(self, action, result, started, obs):
         row = {
