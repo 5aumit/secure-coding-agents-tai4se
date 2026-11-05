@@ -19,14 +19,26 @@ def validate_checks(checks):
         raise ValueError("security.checks must be a list")
     names = set()
     for check in checks:
-        if not isinstance(check, dict) or set(check) != {"name", "enabled", "patterns"}:
-            raise ValueError("Each check needs name, enabled, and patterns")
+        if not isinstance(check, dict) or not {"name", "enabled"} <= check.keys():
+            raise ValueError("Each check needs name and enabled")
         name = check["name"]
         if not isinstance(name, str) or name not in SUPPORTED_GUARDRAILS or name in names:
             raise ValueError(f"Unknown or duplicate security check: {name}")
         names.add(name)
-        if not isinstance(check["enabled"], bool) or not isinstance(check["patterns"], list):
-            raise ValueError("Check enabled must be boolean and patterns must be a list")
+        if not isinstance(check["enabled"], bool):
+            raise ValueError("Check enabled must be boolean")
+        if name == "jev":
+            if set(check) - {"name", "enabled", "model", "risk_threshold", "probability_threshold"}:
+                raise ValueError("Unknown Jev setting")
+            if "model" in check and (not isinstance(check["model"], str) or not check["model"].strip()):
+                raise ValueError("Jev model must be a nonempty string")
+            for key, default, upper in (("risk_threshold", 3.0, 4), ("probability_threshold", 0.75, 1)):
+                value = check.get(key, default)
+                if not isinstance(value, (int, float)) or isinstance(value, bool) or not 0 <= value <= upper:
+                    raise ValueError(f"Jev {key} must be a number from 0 to {upper}")
+            continue
+        if set(check) != {"name", "enabled", "patterns"} or not isinstance(check["patterns"], list):
+            raise ValueError("Each regex check needs name, enabled, and a patterns list")
         for pattern in check["patterns"]:
             if not isinstance(pattern, str):
                 raise ValueError("Regex patterns must be strings")
@@ -37,10 +49,11 @@ def validate_checks(checks):
 class GuardedEnvironment:
     """Check model commands, then delegate allowed commands to mini's environment."""
 
-    def __init__(self, env, checks, record):
+    def __init__(self, env, checks, record, context=None):
         self.env = env
         self.checks = validate_checks(checks)
         self.record = record
+        self.context = context
         self.error = None
 
     def __getattr__(self, name):
@@ -48,11 +61,12 @@ class GuardedEnvironment:
 
     def execute(self, action: dict, **kwargs):
         command = action.get("command", "")
+        blocked = False
         try:
             for check in self.checks:
                 if not check["enabled"]:
                     continue
-                decision = SUPPORTED_GUARDRAILS[check["name"]].check(command, check)
+                decision = SUPPORTED_GUARDRAILS[check["name"]].check(command, check, self.context)
                 if (
                     not isinstance(decision, GuardrailResult)
                     or not isinstance(decision.blocked, bool)
@@ -68,11 +82,14 @@ class GuardedEnvironment:
                 if decision.blocked:
                     result = _BLOCKED_RESULT.copy()
                     self.record({**row, "result": result})
-                    return result
-                self.record(row)
+                    blocked = True
+                else:
+                    self.record(row)
         except Exception as exc:
             self.error = CheckFailure(f"Security check failed: {type(exc).__name__}")
             self.record({"action": action, "decision": "error", "error_type": type(exc).__name__})
             raise self.error from None
+        if blocked:
+            return _BLOCKED_RESULT.copy()
         self.record({"action": action, "decision": "execute"})
         return self.env.execute(action, **kwargs)
