@@ -178,6 +178,28 @@ def test_scoring_model_calls_are_recorded_separately_with_session_and_cost(monke
     assert active == []
 
 
+def test_cached_model_calls_record_zero_cost_and_tokens(monkeypatch):
+    from inspect_ai.model import ModelCall
+
+    monkeypatch.setenv("LANGFUSE_TRACING_ENABLED", "true")
+    client = FakeClient()
+    hook = LangfuseHooks(client)
+    run(hook.on_sample_start(sample_start("a")))
+    cached = ModelEvent(
+        model="openrouter/example/model",
+        input=[], tools=[], tool_choice="auto", config=GenerateConfig(),
+        output=ModelOutput.from_content("openrouter/example/model", "GRADE: C").model_copy(
+            update={"usage": ModelUsage(input_tokens=100, output_tokens=5, total_cost=0.0042)}
+        ),
+        cache="read",
+        call=ModelCall(request={}, response={"usage": {"cost": 0.0042}}),
+    )
+    run(hook.on_sample_event(SampleEvent(None, "run-1", "eval-1", "a", cached)))
+    generation = client.roots[0].children[0].children[0]
+    assert generation.params["cost_details"] == {"total": 0.0}
+    assert generation.params["usage_details"] == {"input": 0, "output": 0}
+
+
 async def sample_start_for(hook, sid):
     await hook.on_sample_start(sample_start(sid))
 

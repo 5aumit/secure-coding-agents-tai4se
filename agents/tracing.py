@@ -217,6 +217,9 @@ class LangfuseHooks(Hooks):
                 "traceback": event.traceback if event.error else None,
             }
             cost = _cost(event)
+            if event.cache == "read":
+                # A local cache read makes no provider call, so it is not billed.
+                usage, cost = {"input": 0, "output": 0}, 0.0
             with propagate_attributes(**state.attributes):
                 obs = parent.start_observation(
                     name="model call",
