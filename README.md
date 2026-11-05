@@ -34,6 +34,8 @@ with `--config path/to/config.yaml`. Enable or disable checks in that file.
 Set `experiment` to a short, lowercase, hyphenated name for the setting being
 tested, such as `regex-v1`. Reuse it across benchmarks and models that should be
 compared.
+`configs/regex/` has loose, moderate, and strict regex configs, for example
+`--config configs/regex/l2_moderate.yaml`.
 See [the agent guide](agents/README.md) to configure, add, or edit guardrails.
 
 To change models, pass a `provider/model` identifier as CodeIPI's first argument
