@@ -13,12 +13,21 @@ from agents.security import GuardedEnvironment, validate_checks
 
 def load_config(path: str | Path):
     data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
-    if not isinstance(data, dict) or set(data) != {"experiment", "model", "limits", "security"}:
-        raise ValueError("Config needs only experiment, model, limits, and security")
+    required = {"experiment", "model", "limits", "security"}
+    if not isinstance(data, dict) or not required <= set(data) <= required | {"providers"}:
+        raise ValueError("Config needs experiment, model, limits, and security, and may set providers")
     if not isinstance(data["experiment"], str) or not data["experiment"].strip():
         raise ValueError("experiment must be a non-empty string")
     if data["model"] is not None and not isinstance(data["model"], str):
         raise ValueError("model must be a string or null")
+    providers = data.setdefault("providers", None)
+    if providers is not None and (
+        not isinstance(providers, list)
+        or not providers
+        or not all(isinstance(name, str) and name.strip() for name in providers)
+        or len(set(providers)) != len(providers)
+    ):
+        raise ValueError("providers must be null or a list of unique host names")
     limits = data["limits"]
     if not isinstance(limits, dict) or set(limits) != {"steps", "seconds", "cost_usd"}:
         raise ValueError("limits needs steps, seconds, and cost_usd")
@@ -70,7 +79,10 @@ class TracedModel(LitellmModel):
                         "output": usage.get("completion_tokens", 0),
                     },
                     cost_details={"total": usage["cost"]} if isinstance(usage.get("cost"), (int, float)) else None,
-                    metadata={"provider_returned_reasoning": raw.get("choices", [{}])[0].get("message", {}).get("reasoning_content")},
+                    metadata={
+                        "provider": raw.get("provider"),
+                        "provider_returned_reasoning": raw.get("choices", [{}])[0].get("message", {}).get("reasoning_content"),
+                    },
                 )
             return response
 
@@ -116,8 +128,17 @@ def run_swe(
         env, config["security"]["checks"], save_decision,
         context={"task": task, "source": "mini-swe-agent Bash tool"},
     )
+    model_kwargs = dict(stock["model"].get("model_kwargs", {}))
+    if config.get("providers"):
+        if not model_name.startswith("openrouter/"):
+            raise ValueError("providers only applies to openrouter/ models")
+        # Use only these hosts, never fall back to others, and skip hosts that lack a requested feature.
+        model_kwargs["extra_body"] = {"provider": {
+            "order": config["providers"], "allow_fallbacks": False, "require_parameters": True,
+        }}
     model = TracedModel(
-        model_name=model_name, trace=trace, calls=calls, cancelled=cancelled, **stock["model"]
+        model_name=model_name, trace=trace, calls=calls, cancelled=cancelled,
+        **{**stock["model"], "model_kwargs": model_kwargs},
     )
     agent = DefaultAgent(model, guarded, **agent_config)
     try:
