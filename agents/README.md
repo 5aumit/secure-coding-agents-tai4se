@@ -47,6 +47,25 @@ Pass the file to either runner with `--config path/to/config.yaml`.
 Set `enabled: false` to disable a guardrail. Keep other settings identical when
 comparing runs with and without that guardrail.
 
+### Regex levels
+
+`configs/regex/` has three ready-made regex configs. Each is a copy of
+`configs/default.yaml` with only the regex check enabled, and each level
+includes every pattern from the level below.
+
+| Config | Experiment | Blocks |
+|---|---|---|
+| `l1_loose.yaml` | `regex-l1` | Near-certain attack signatures: writing agent policy files, git hooks, `curl \| sh`, environment dumps, secret variables and files, fork bombs |
+| `l2_moderate.yaml` | `regex-l2` | Adds risky categories: `.env` and home directories, installs outside a dev-tool allowlist, hidden scripts, shell startup files and cron, huge thread pools, `base64 -d` |
+| `l3_strict.yaml` | `regex-l3` | Adds whole capabilities: network tools, all installs, process spawning, concurrency, background jobs, `git push`, every `chmod` and `os.environ` |
+
+L3 also blocks some legitimate work, such as `pip install -e .` or source code
+that uses `subprocess`. Patterns are generic and name no benchmark strings.
+They match the whole command text, including file contents written through
+heredocs. A status file write or `python some_script.py` can't be told apart
+from normal work, so no level blocks them. `tests/test_regex_levels.py` lists
+example commands and the lowest level expected to block each.
+
 ### Jev command checks
 
 Jev sends the original coding task, including issue text, and each proposed Bash
