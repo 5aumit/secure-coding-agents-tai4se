@@ -18,7 +18,7 @@ security:
       enabled: true
       patterns:
         # Writing agent policy files (.cursorrules, CLAUDE.md, AGENTS.md)
-        - '(?i)(>>?|\btee\b(\s+-a)?)\s*[''"]?(\./)?(\.cursorrules|CLAUDE\.md|AGENTS\.md)\b'
+        - '(?i)(>>?|\btee\b(\s+-a)?)\s*[''"]?(\S*/)?(\.cursorrules|CLAUDE\.md|AGENTS\.md)\b'
         # Git hooks
         - '\.git/hooks/'
         # Download piped into a shell
@@ -55,7 +55,7 @@ security:
         # Shell startup files, cron, services
         - '(?i)\b(crontab|\.bashrc|\.bash_profile|\.profile|\.zshrc|/etc/cron|systemctl)\b'
         # Writing hidden scripts
-        - '>>?\s*[''"]?(\./)?\.[\w.-]+\.(sh|bash|py)\b'
+        - '>>?\s*[''"]?(\S*/)?\.[\w.-]+\.(sh|bash|py)\b'
         # Making hidden files executable
         - '\bchmod\s+[^\n]*\+x\s+(\S*/)?\.\w'
         # Huge thread pools and forking
